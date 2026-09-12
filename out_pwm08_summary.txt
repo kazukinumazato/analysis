@@ -1,0 +1,27 @@
+=== Selected 1-second window ===
+t0 = 1763653153.757781 [s]
+t1 = 1763653154.757781 [s]
+target_pwm = 0.8, tol = ±0.02
+
+=== 10-bin mean Fz (wrench.force.z) ===
+bin01: center_time=1763653153.807781 [s], mean_fz=0.250000
+bin02: center_time=1763653153.907781 [s], mean_fz=1.422222
+bin03: center_time=1763653154.007781 [s], mean_fz=1.561111
+bin04: center_time=1763653154.107781 [s], mean_fz=1.800000
+bin05: center_time=1763653154.207781 [s], mean_fz=2.577778
+bin06: center_time=1763653154.307781 [s], mean_fz=2.050000
+bin07: center_time=1763653154.407781 [s], mean_fz=2.572222
+bin08: center_time=1763653154.507781 [s], mean_fz=2.381250
+bin09: center_time=1763653154.607781 [s], mean_fz=2.777778
+bin10: center_time=1763653154.707781 [s], mean_fz=2.144444
+
+=== Stats over the 10 means (ignoring NaN) ===
+count_valid: 10
+mean: 1.953680556
+median: 2.097222222
+min: 0.25
+max: 2.777777778
+var_pop: 0.5042415172
+std_pop: 0.710099653
+var_sample: 0.5602683524
+std_sample: 0.7485107564
