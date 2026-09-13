@@ -251,6 +251,52 @@ def _butter_lowpass_filter(t, x, cutoff_hz, order=4):
     return y
 
 
+def _analyze_vibration_fft(name, t, vibration, fs, fft_fmax, flap_flo, flap_fhi):
+    """振動のFFTと指定帯域の寄与率を計算して表示する。"""
+    t_u, vibration_u, fs_u = _uniform_resample(t, vibration, fs)
+
+    freqs = mag = power = None
+    dominant_frequency = float("nan")
+    band = None
+
+    if t_u is None:
+        print(f"{name} FFT: resampling failed (too few samples or fs invalid).")
+        return freqs, power, dominant_frequency, band
+
+    freqs, mag, power = _fft_spectra(vibration_u, fs_u)
+    if freqs is None:
+        print(f"{name} FFT: failed (n too small).")
+        return freqs, power, dominant_frequency, band
+
+    dominant_frequency, _ = _dominant_peak(
+        freqs,
+        mag,
+        fmin=0.1,
+        fmax=fft_fmax,
+    )
+    print(f"=== {name.capitalize()} FFT peak ===")
+    print(
+        f"dominant f (|X| peak, 0.1–{fft_fmax:.1f}Hz): "
+        f"{dominant_frequency:.3f} Hz"
+    )
+
+    band = _band_contribution(
+        freqs,
+        power,
+        f_lo=flap_flo,
+        f_hi=flap_fhi,
+        f_total_lo=0.1,
+        f_total_hi=fft_fmax,
+    )
+    print(f"=== {name.capitalize()} flapping-band contribution (power) ===")
+    print(f"band                    : {flap_flo:.1f}–{flap_fhi:.1f} Hz")
+    print(f"power ratio (band/total): {band['power_ratio'] * 100.0:.2f} %")
+    print(f"peak freq (all)         : {band['peak_freq_all']:.3f} Hz")
+    print(f"peak freq (band)        : {band['peak_freq_band']:.3f} Hz")
+
+    return freqs, power, dominant_frequency, band
+
+
 # ---------------- main ----------------
 
 def main():
@@ -266,7 +312,7 @@ def main():
     ap.add_argument(
         "--att-actual-topic",
         default="/crobat/uav/baselink/odom",
-        help="nav_msgs/Odometry; use msg.pose.pose.orientation (quat->roll)",
+        help="nav_msgs/Odometry; use msg.pose.pose.orientation (quat->roll/pitch)",
     )
 
     # target topics
@@ -278,7 +324,7 @@ def main():
     ap.add_argument(
         "--att-target-topic",
         default="/crobat/desire_coordinate",
-        help="spinal/DesireCoord; roll/pitch/yaw in rad (we use roll)",
+        help="spinal/DesireCoord; use roll and pitch in rad",
     )
 
     ap.add_argument("--trend-window-sec", type=float, default=0.5)
@@ -298,6 +344,20 @@ def main():
         type=int,
         default=4,
         help="Butterworth low-pass filter order",
+    )
+
+    # pitch LPF
+    ap.add_argument(
+        "--pitch-lpf-cutoff",
+        type=float,
+        default=60.0,
+        help="Butterworth low-pass cutoff frequency for actual pitch [Hz]",
+    )
+    ap.add_argument(
+        "--pitch-lpf-order",
+        type=int,
+        default=4,
+        help="Butterworth low-pass filter order for actual pitch",
     )
 
     # plot margin
@@ -336,9 +396,9 @@ def main():
     t_px, x_tgt = [], []
     t_pa, x_act = [], []
 
-    # attitude (roll)
-    t_at, roll_tgt = [], []
-    t_aa, roll_act = [], []
+    # attitude (roll and pitch share the same timestamps)
+    t_at, roll_tgt, pitch_tgt = [], [], []
+    t_aa, roll_act, pitch_act = [], [], []
 
     topics = [
         args.pos_target_topic,
@@ -371,18 +431,22 @@ def main():
             # attitude target
             if topic == args.att_target_topic:
                 try:
+                    roll = float(msg.roll)
+                    pitch = float(msg.pitch)
                     t_at.append(ts)
-                    roll_tgt.append(float(msg.roll))
+                    roll_tgt.append(roll)
+                    pitch_tgt.append(pitch)
                 except Exception:
                     pass
 
-            # attitude actual: quat -> roll
+            # attitude actual: quaternion -> roll and pitch
             if topic == args.att_actual_topic:
                 try:
                     q = msg.pose.pose.orientation
-                    r, _, _ = euler_from_quaternion((q.x, q.y, q.z, q.w))
+                    r, p, _ = euler_from_quaternion((q.x, q.y, q.z, q.w))
                     t_aa.append(ts)
                     roll_act.append(float(r))
+                    pitch_act.append(float(p))
                 except Exception:
                     pass
 
@@ -396,9 +460,11 @@ def main():
 
     t_at = np.asarray(t_at, float)
     roll_tgt = np.asarray(roll_tgt, float)
+    pitch_tgt = np.asarray(pitch_tgt, float)
 
     t_aa = np.asarray(t_aa, float)
     roll_act = np.asarray(roll_act, float)
+    pitch_act = np.asarray(pitch_act, float)
 
     print(
         "counts:",
@@ -420,14 +486,18 @@ def main():
     if len(t_aa) < 2:
         raise ValueError("Attitude actual topic has too few samples (need >=2).")
 
-    # ---------- actual roll low-pass ----------
+    # ---------- actual attitude low-pass ----------
 
-    fs_roll = _estimate_fs(t_aa)
+    fs_att = _estimate_fs(t_aa)
 
-    print(f"roll actual fs_est : {fs_roll:.2f} Hz")
+    print(f"attitude actual fs_est: {fs_att:.2f} Hz")
     print(
         f"roll LPF           : Butterworth low-pass, "
         f"order={args.roll_lpf_order}, cutoff={args.roll_lpf_cutoff:.2f} Hz"
+    )
+    print(
+        f"pitch LPF          : Butterworth low-pass, "
+        f"order={args.pitch_lpf_order}, cutoff={args.pitch_lpf_cutoff:.2f} Hz"
     )
 
     roll_act_lpf = _butter_lowpass_filter(
@@ -435,6 +505,12 @@ def main():
         roll_act,
         cutoff_hz=args.roll_lpf_cutoff,
         order=args.roll_lpf_order,
+    )
+    pitch_act_lpf = _butter_lowpass_filter(
+        t_aa,
+        pitch_act,
+        cutoff_hz=args.pitch_lpf_cutoff,
+        order=args.pitch_lpf_order,
     )
 
     # ---------- position RMSE (target timebase) ----------
@@ -463,16 +539,20 @@ def main():
     m_act_rmse = (t_aa >= att_t0) & (t_aa <= att_t1)
     t_act_rmse = t_aa[m_act_rmse]
     roll_act_rmse = roll_act_lpf[m_act_rmse]
+    pitch_act_rmse = pitch_act_lpf[m_act_rmse]
 
     if len(t_act_rmse) < 2:
         raise ValueError("Attitude actual has too few samples in the RMSE window (need >=2).")
 
     if has_desired:
         roll_tgt_on_act_rmse = _interp1(t_at, roll_tgt, t_act_rmse)
+        pitch_tgt_on_act_rmse = _interp1(t_at, pitch_tgt, t_act_rmse)
     else:
         roll_tgt_on_act_rmse = np.zeros_like(t_act_rmse, dtype=float)
+        pitch_tgt_on_act_rmse = np.zeros_like(t_act_rmse, dtype=float)
 
     rmse_roll = _rmse(roll_tgt_on_act_rmse, roll_act_rmse)
+    rmse_pitch = _rmse(pitch_tgt_on_act_rmse, pitch_act_rmse)
 
     # プロット用: 前後 margin 秒拡張
     plot_t0 = att_t0 - args.plot_margin_sec
@@ -481,18 +561,22 @@ def main():
     m_act_plot = (t_aa >= plot_t0) & (t_aa <= plot_t1)
     t_act = t_aa[m_act_plot]
     roll_act_w = roll_act_lpf[m_act_plot]
+    pitch_act_w = pitch_act_lpf[m_act_plot]
 
     if len(t_act) < 2:
         raise ValueError("Attitude actual has too few samples in the plot window (need >=2).")
 
     if has_desired:
         roll_tgt_on_act = _interp1(t_at, roll_tgt, t_act)
+        pitch_tgt_on_act = _interp1(t_at, pitch_tgt, t_act)
     else:
         roll_tgt_on_act = np.zeros_like(t_act, dtype=float)
+        pitch_tgt_on_act = np.zeros_like(t_act, dtype=float)
 
     print("=== Tracking RMSE ===")
     print(f"x RMSE    : {rmse_x:.6f}")
     print(f"roll RMSE : {rmse_roll:.6f} rad  (target interpolated; actual=LPF applied)")
+    print(f"pitch RMSE: {rmse_pitch:.6f} rad  (target interpolated; actual=LPF applied)")
 
     # ---------- vibration analysis (continuous actual in plot window) ----------
 
@@ -500,71 +584,77 @@ def main():
     win = int(max(1, round(fs * args.trend_window_sec))) if np.isfinite(fs) else 1
 
     roll_trend = _moving_average(roll_act_w, win)
+    pitch_trend = _moving_average(pitch_act_w, win)
     roll_vib = roll_act_w - roll_trend
+    pitch_vib = pitch_act_w - pitch_trend
 
-    vib_rms = (
+    roll_vib_rms = (
         float(np.sqrt(np.nanmean(roll_vib * roll_vib)))
         if np.any(np.isfinite(roll_vib))
         else float("nan")
     )
-    vib_p2p = (
+    roll_vib_p2p = (
         float(np.nanmax(roll_vib) - np.nanmin(roll_vib))
         if np.any(np.isfinite(roll_vib))
         else float("nan")
     )
-    vib_p95 = (
+    roll_vib_p95 = (
         float(np.nanpercentile(roll_vib, 97.5) - np.nanpercentile(roll_vib, 2.5))
         if np.any(np.isfinite(roll_vib))
         else float("nan")
     )
+    pitch_vib_rms = (
+        float(np.sqrt(np.nanmean(pitch_vib * pitch_vib)))
+        if np.any(np.isfinite(pitch_vib))
+        else float("nan")
+    )
+    pitch_vib_p2p = (
+        float(np.nanmax(pitch_vib) - np.nanmin(pitch_vib))
+        if np.any(np.isfinite(pitch_vib))
+        else float("nan")
+    )
+    pitch_vib_p95 = (
+        float(
+            np.nanpercentile(pitch_vib, 97.5)
+            - np.nanpercentile(pitch_vib, 2.5)
+        )
+        if np.any(np.isfinite(pitch_vib))
+        else float("nan")
+    )
 
-    print("=== Vibration basic ===")
+    print("=== Roll vibration basic ===")
     print(f"fs_est       : {fs:.2f} Hz")
     print(f"trend window : {args.trend_window_sec:.3f} s (~{win} samples)")
-    print(f"vib RMS      : {vib_rms:.6f} rad")
-    print(f"vib p2p      : {vib_p2p:.6f} rad")
-    print(f"vib 95% width: {vib_p95:.6f} rad")
+    print(f"vib RMS      : {roll_vib_rms:.6f} rad")
+    print(f"vib p2p      : {roll_vib_p2p:.6f} rad")
+    print(f"vib 95% width: {roll_vib_p95:.6f} rad")
+    print("=== Pitch vibration basic ===")
+    print(f"fs_est       : {fs:.2f} Hz")
+    print(f"trend window : {args.trend_window_sec:.3f} s (~{win} samples)")
+    print(f"vib RMS      : {pitch_vib_rms:.6f} rad")
+    print(f"vib p2p      : {pitch_vib_p2p:.6f} rad")
+    print(f"vib 95% width: {pitch_vib_p95:.6f} rad")
 
     # ---------- FFT peak & band contribution ----------
 
-    t_u, vib_u, fs_u = _uniform_resample(t_act, roll_vib, fs)
-
-    freqs = mag = power = None
-    dom_f = float("nan")
-    band = None
-
-    if t_u is None:
-        print("FFT: resampling failed (too few samples or fs invalid).")
-    else:
-        freqs, mag, power = _fft_spectra(vib_u, fs_u)
-
-        if freqs is None:
-            print("FFT: failed (n too small).")
-        else:
-            dom_f, _ = _dominant_peak(
-                freqs,
-                mag,
-                fmin=0.1,
-                fmax=args.fft_fmax,
-            )
-
-            print("=== FFT peak ===")
-            print(f"dominant f (|X| peak, 0.1–{args.fft_fmax:.1f}Hz): {dom_f:.3f} Hz")
-
-            band = _band_contribution(
-                freqs,
-                power,
-                f_lo=args.flap_flo,
-                f_hi=args.flap_fhi,
-                f_total_lo=0.1,
-                f_total_hi=args.fft_fmax,
-            )
-
-            print("=== 12–20 Hz band contribution (power) ===")
-            print(f"band                    : {args.flap_flo:.1f}–{args.flap_fhi:.1f} Hz")
-            print(f"power ratio (band/total): {band['power_ratio'] * 100.0:.2f} %")
-            print(f"peak freq (all)         : {band['peak_freq_all']:.3f} Hz")
-            print(f"peak freq (band)        : {band['peak_freq_band']:.3f} Hz")
+    roll_freqs, roll_power, roll_dom_f, roll_band = _analyze_vibration_fft(
+        "roll",
+        t_act,
+        roll_vib,
+        fs,
+        args.fft_fmax,
+        args.flap_flo,
+        args.flap_fhi,
+    )
+    pitch_freqs, pitch_power, pitch_dom_f, pitch_band = _analyze_vibration_fft(
+        "pitch",
+        t_act,
+        pitch_vib,
+        fs,
+        args.fft_fmax,
+        args.flap_flo,
+        args.flap_fhi,
+    )
 
     # ---------- plots ----------
 
@@ -659,15 +749,90 @@ def main():
 
     plt.xlabel("time [s]")
     plt.ylabel("roll vibration [rad]")
-    plt.title(f"roll vibration: RMS={vib_rms:.3f} rad, f*={dom_f:.2f} Hz")
+    plt.title(
+        f"roll vibration: RMS={roll_vib_rms:.3f} rad, "
+        f"f*={roll_dom_f:.2f} Hz"
+    )
+    _apply_paper_style()
+
+    # pitch: target vs actual (with pre/post margin)
+    plt.figure()
+
+    plt.plot(
+        t_act - plot_t0,
+        pitch_tgt_on_act,
+        color=TARGET_COLOR,
+        linewidth=4.0,
+        linestyle="--",
+        label="target",
+    )
+    plt.plot(
+        t_act - plot_t0,
+        pitch_act_w,
+        color=ACTUAL_COLOR,
+        linewidth=3.0,
+        label="actual",
+    )
+
+    plt.xlabel("time [s]")
+    plt.ylabel("pitch [rad]")
+
+    if has_desired:
+        plt.title(f"pitch: target vs actual, margin={args.plot_margin_sec:.1f}s")
+    else:
+        plt.title("pitch: target 0 rad fallback vs actual")
+
+    plt.legend(frameon=False)
+    _apply_paper_style()
+
+    # pitch: actual and trend
+    plt.figure()
+
+    plt.plot(
+        t_act - plot_t0,
+        pitch_act_w,
+        color=ACTUAL_COLOR,
+        linewidth=1.8,
+        label="actual LPF",
+    )
+    plt.plot(
+        t_act - plot_t0,
+        pitch_trend,
+        color=TREND_COLOR,
+        linewidth=2.2,
+        label="trend",
+    )
+
+    plt.xlabel("time [s]")
+    plt.ylabel("pitch [rad]")
+    plt.title("pitch: actual LPF and trend")
+    plt.legend(frameon=False)
+    _apply_paper_style()
+
+    # pitch: vibration
+    plt.figure()
+
+    plt.plot(
+        t_act - plot_t0,
+        pitch_vib,
+        color=VIB_COLOR,
+        linewidth=1.8,
+    )
+
+    plt.xlabel("time [s]")
+    plt.ylabel("pitch vibration [rad]")
+    plt.title(
+        f"pitch vibration: RMS={pitch_vib_rms:.3f} rad, "
+        f"f*={pitch_dom_f:.2f} Hz"
+    )
     _apply_paper_style()
 
     # spectrum with directly specified broken y-axis
-    if freqs is not None and power is not None:
-        m = (freqs >= 0.0) & (freqs <= args.fft_fmax)
+    if roll_freqs is not None and roll_power is not None:
+        m = (roll_freqs >= 0.0) & (roll_freqs <= args.fft_fmax)
 
-        f_plot = freqs[m]
-        p_plot = power[m]
+        f_plot = roll_freqs[m]
+        p_plot = roll_power[m]
 
         finite_p = p_plot[np.isfinite(p_plot)]
 
@@ -676,10 +841,10 @@ def main():
 
             title = "roll vibration power spectrum"
 
-            if band is not None and np.isfinite(band["power_ratio"]):
+            if roll_band is not None and np.isfinite(roll_band["power_ratio"]):
                 title += (
                     f"  ({args.flap_flo:.0f}–{args.flap_fhi:.0f}Hz="
-                    f"{band['power_ratio'] * 100.0:.1f}%)"
+                    f"{roll_band['power_ratio'] * 100.0:.1f}%)"
                 )
 
             # 軸ブレーク範囲を直接指定
@@ -810,6 +975,137 @@ def main():
                 print("DEBUG p_low_max:", p_low_max)
                 print("DEBUG p_high_min:", p_high_min)
                 print("DEBUG p_max:", p_max)
+
+    # pitch spectrum with the same broken y-axis settings as roll
+    if pitch_freqs is not None and pitch_power is not None:
+        m = (pitch_freqs >= 0.0) & (pitch_freqs <= args.fft_fmax)
+
+        f_plot = pitch_freqs[m]
+        p_plot = pitch_power[m]
+
+        finite_p = p_plot[np.isfinite(p_plot)]
+
+        if len(finite_p) > 0:
+            p_max = float(np.nanmax(finite_p))
+
+            title = "pitch vibration power spectrum"
+
+            if pitch_band is not None and np.isfinite(pitch_band["power_ratio"]):
+                title += (
+                    f"  ({args.flap_flo:.0f}–{args.flap_fhi:.0f}Hz="
+                    f"{pitch_band['power_ratio'] * 100.0:.1f}%)"
+                )
+
+            if args.spectrum_break_lower is not None and args.spectrum_break_upper is not None:
+                p_low_max = float(args.spectrum_break_lower)
+                p_high_min = float(args.spectrum_break_upper)
+            else:
+                p_low_max = float(
+                    np.nanpercentile(
+                        finite_p,
+                        args.spectrum_auto_break_percentile,
+                    )
+                )
+                p_high_min = float(p_low_max * 1.2)
+
+            use_broken_axis = True
+
+            if p_low_max <= 0:
+                print("WARNING: spectrum-break-lower must be > 0. Normal pitch spectrum plot is used.")
+                use_broken_axis = False
+
+            if p_high_min <= p_low_max:
+                print("WARNING: spectrum-break-upper must be larger than spectrum-break-lower. Normal pitch spectrum plot is used.")
+                use_broken_axis = False
+
+            if p_max <= p_high_min:
+                print("WARNING: spectrum-break-upper is larger than the maximum pitch spectrum power. Normal spectrum plot is used.")
+                use_broken_axis = False
+
+            if not use_broken_axis:
+                plt.figure()
+
+                plt.plot(
+                    f_plot,
+                    p_plot,
+                    color=SPECTRUM_COLOR,
+                    linewidth=1.6,
+                )
+
+                plt.xlabel("frequency [Hz]")
+                plt.ylabel("power (a.u.)")
+                plt.title(title)
+                _apply_paper_style()
+
+            else:
+                fig, (ax_high, ax_low) = plt.subplots(
+                    2,
+                    1,
+                    sharex=True,
+                    figsize=(8, 6),
+                    gridspec_kw={
+                        "height_ratios": [1, 1],
+                        "hspace": 0.3,
+                    },
+                )
+
+                ax_high.plot(
+                    f_plot,
+                    p_plot,
+                    color=SPECTRUM_COLOR,
+                    linewidth=1.6,
+                )
+                ax_low.plot(
+                    f_plot,
+                    p_plot,
+                    color=SPECTRUM_COLOR,
+                    linewidth=1.6,
+                )
+
+                ax_low.set_ylim(0, p_low_max)
+                ax_high.set_ylim(p_high_min, p_max * 1.05)
+
+                ax_high.spines["bottom"].set_visible(False)
+                ax_low.spines["top"].set_visible(False)
+                ax_high.tick_params(labelbottom=False)
+
+                ax_low.set_xlabel("frequency [Hz]")
+                ax_low.set_ylabel("")
+                ax_high.set_ylabel("")
+
+                ax_high.tick_params(labelleft=False)
+                ax_low.tick_params(labelleft=False)
+
+                ax_high.set_title(title)
+
+                _apply_paper_style(ax_high)
+                _apply_paper_style(ax_low)
+
+                ax_high.spines["bottom"].set_visible(False)
+                ax_low.spines["top"].set_visible(False)
+                ax_high.tick_params(labelbottom=False)
+                ax_high.tick_params(labelleft=False)
+                ax_low.tick_params(labelleft=False)
+
+                d = 0.020
+
+                kwargs = dict(
+                    transform=ax_high.transAxes,
+                    color=EDGE_COLOR,
+                    clip_on=False,
+                    linewidth=1.0,
+                )
+                ax_high.plot((-d, +d), (-d, +d), **kwargs)
+                ax_high.plot((1 - d, 1 + d), (-d, +d), **kwargs)
+
+                kwargs.update(transform=ax_low.transAxes)
+                ax_low.plot((-d, +d), (1 - d, 1 + d), **kwargs)
+                ax_low.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)
+
+                print("=== Pitch spectrum broken y-axis ===")
+                print(f"break lower / lower axis ymax : {p_low_max:.6e}")
+                print(f"break upper / upper axis ymin : {p_high_min:.6e}")
+                print(f"spectrum max                  : {p_max:.6e}")
 
     plt.show()
 
