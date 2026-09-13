@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the cycle-averaged force-vector model from a Crobat motor-test bag."""
+"""Validate the force-vector model using commanded servo angles."""
 
 import argparse
 import math
@@ -326,49 +326,28 @@ def force_samples_for_cycle(
     return integration_times, integration_forces, len(interior_times)
 
 
-def estimate_servo_angle_from_force(
-    force_at_cycle_start: np.ndarray,
-    servo_zero_angle: float,
-    base_z_rotation: float,
-    servo_angle_min: float,
-    servo_angle_max: float,
-) -> float:
-    """Find the constrained servo angle that minimizes |servo-frame Fy|."""
-    base_rotation = servo_rotation_in_sensor(
-        servo_zero_angle, servo_zero_angle, base_z_rotation
-    )
-    force_in_yaw_aligned_frame = force_at_cycle_start.dot(base_rotation)
-    force_y = float(force_in_yaw_aligned_frame[1])
-    force_z = float(force_in_yaw_aligned_frame[2])
-    unconstrained_theta = math.atan2(-force_y, force_z)
-
-    theta_min = math.radians(servo_angle_min - servo_zero_angle)
-    theta_max = math.radians(servo_angle_max - servo_zero_angle)
-    candidates = [theta_min, theta_max]
-    for branch in range(-2, 3):
-        candidate = unconstrained_theta + branch * math.pi
-        if theta_min <= candidate <= theta_max:
-            candidates.append(candidate)
-
-    def absolute_y_force(theta: float) -> float:
-        return abs(math.cos(theta) * force_y + math.sin(theta) * force_z)
-
-    best_theta = min(candidates, key=absolute_y_force)
-    return servo_zero_angle + math.degrees(best_theta)
+def command_angle_at(
+    timestamp: float,
+    servo_times: np.ndarray,
+    servo_angles: np.ndarray,
+) -> Optional[float]:
+    index = int(np.searchsorted(servo_times, timestamp, side="right") - 1)
+    if index < 0:
+        return None
+    return float(servo_angles[index])
 
 
 def compute_cycle_results(
     interval: MotorInterval,
     force_times: np.ndarray,
     forces: np.ndarray,
-    angle_forces: np.ndarray,
+    servo_times: np.ndarray,
+    servo_angles: np.ndarray,
     flapping_period: float,
     settle_time: float,
     end_trim: float,
     servo_zero_angle: float,
     base_z_rotation: float,
-    servo_angle_min: float,
-    servo_angle_max: float,
     min_force_samples: int,
 ) -> List[CycleResult]:
     first_cycle = int(math.ceil(settle_time / flapping_period - 1.0e-9))
@@ -389,25 +368,14 @@ def compute_cycle_results(
         if integration_times is None or integration_forces is None:
             continue
 
-        # The fixed condition is known to be at the zero-deflection angle. For
-        # moving conditions, infer the frame from the measured force instead
-        # of assuming that the actual angle equals the commanded angle.
+        # The fixed condition remains analyzable if recording began just after
+        # its 90-degree command. Moving conditions use the latest command at t0.
         if math.isclose(interval.speed, 0.0, abs_tol=1.0e-12):
             servo_angle = servo_zero_angle
         else:
-            force_at_cycle_start = np.array(
-                [
-                    np.interp(start, force_times, angle_forces[:, axis])
-                    for axis in range(3)
-                ]
-            )
-            servo_angle = estimate_servo_angle_from_force(
-                force_at_cycle_start,
-                servo_zero_angle,
-                base_z_rotation,
-                servo_angle_min,
-                servo_angle_max,
-            )
+            servo_angle = command_angle_at(start, servo_times, servo_angles)
+            if servo_angle is None:
+                continue
         theta = servo_angle - servo_zero_angle
         rotation = servo_rotation_in_sensor(
             servo_angle, servo_zero_angle, base_z_rotation
@@ -512,64 +480,7 @@ def plot_error(summaries: Sequence[dict]) -> None:
     axis.grid(True, alpha=0.3)
     axis.legend()
     figure.tight_layout()
-
-
-def plot_servo_angle_comparison(
-    cycles: Sequence[CycleResult],
-    intervals: Sequence[MotorInterval],
-    servo_times: np.ndarray,
-    servo_angles: np.ndarray,
-) -> None:
-    pwm_values = sorted({cycle.pwm for cycle in cycles})
-    if not pwm_values:
-        return
-
-    figure, axes = plt.subplots(
-        len(pwm_values),
-        1,
-        figsize=(9.0, 2.8 * len(pwm_values)),
-        squeeze=False,
-    )
-    for axis, pwm in zip(axes[:, 0], pwm_values):
-        pwm_intervals = [interval for interval in intervals if interval.pwm == pwm]
-        group_start = min(interval.start for interval in pwm_intervals)
-        group_end = max(interval.end for interval in pwm_intervals)
-
-        first_command = max(
-            0, int(np.searchsorted(servo_times, group_start, side="right") - 1)
-        )
-        last_command = int(np.searchsorted(servo_times, group_end, side="right"))
-        command_times = servo_times[first_command:last_command] - group_start
-        command_angles = servo_angles[first_command:last_command]
-        if len(command_times):
-            axis.step(
-                command_times,
-                command_angles,
-                where="post",
-                linewidth=1.1,
-                alpha=0.75,
-                label="commanded angle",
-            )
-
-        pwm_cycles = sorted(
-            (cycle for cycle in cycles if cycle.pwm == pwm),
-            key=lambda cycle: cycle.start,
-        )
-        axis.scatter(
-            [cycle.start - group_start for cycle in pwm_cycles],
-            [cycle.servo_angle for cycle in pwm_cycles],
-            s=9.0,
-            alpha=0.8,
-            label="force-estimated angle",
-        )
-        axis.set_title("PWM {:.2f}".format(pwm))
-        axis.set_xlabel("Elapsed time in PWM group [s]")
-        axis.set_ylabel("Servo angle [deg]")
-        axis.grid(True, alpha=0.3)
-        axis.legend(loc="best")
-
-    figure.suptitle("Force-estimated and commanded servo angles")
-    figure.tight_layout()
+    plt.show()
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -604,15 +515,6 @@ def parse_arguments() -> argparse.Namespace:
         help="cutoff frequency of the fourth-order zero-phase force LPF in Hz",
     )
     parser.add_argument(
-        "--angle-cutoff-frequency",
-        type=float,
-        default=2.0,
-        help=(
-            "cutoff frequency of the separate zero-phase LPF used for "
-            "force-based servo-angle estimation (default: 2 Hz)"
-        ),
-    )
-    parser.add_argument(
         "--speed-sequence",
         type=comma_separated_floats,
         default=comma_separated_floats(
@@ -635,18 +537,6 @@ def parse_arguments() -> argparse.Namespace:
         type=float,
         default=90.0,
         help="physical servo angle corresponding to theta=0 deg",
-    )
-    parser.add_argument(
-        "--servo-angle-min",
-        type=float,
-        default=36.0,
-        help="minimum physical servo angle used by force-based estimation",
-    )
-    parser.add_argument(
-        "--servo-angle-max",
-        type=float,
-        default=90.0,
-        help="maximum physical servo angle used by force-based estimation",
     )
     parser.add_argument(
         "--base-z-rotation",
@@ -681,12 +571,6 @@ def main() -> int:
         raise ValueError("--settle-time and --end-trim must be nonnegative")
     if args.min_force_samples < 1:
         raise ValueError("--min-force-samples must be at least one")
-    if args.servo_angle_min >= args.servo_angle_max:
-        raise ValueError("--servo-angle-min must be below --servo-angle-max")
-    if not args.servo_angle_min <= args.servo_zero_angle <= args.servo_angle_max:
-        raise ValueError(
-            "--servo-zero-angle must lie within the servo-angle estimation range"
-        )
     if not args.bag.is_file():
         raise ValueError("bag does not exist: {}".format(args.bag))
 
@@ -708,24 +592,13 @@ def main() -> int:
     forces, force_sampling_frequency = lowpass_forces(
         force_times, raw_forces, args.cutoff_frequency
     )
-    angle_forces, _ = lowpass_forces(
-        force_times, raw_forces, args.angle_cutoff_frequency
-    )
     print(
         "Force LPF: fourth-order Butterworth, cutoff {:.3f} Hz, "
         "estimated sampling frequency {:.3f} Hz".format(
             args.cutoff_frequency, force_sampling_frequency
         )
     )
-    print(
-        "Servo angle: force-based minimum |Fy| at each cycle start after "
-        "a {:.3f} Hz zero-phase LPF, range {:.1f} to {:.1f} deg "
-        "(commands are not used for rotation)".format(
-            args.angle_cutoff_frequency,
-            args.servo_angle_min,
-            args.servo_angle_max,
-        )
-    )
+    print("Servo angle: latest /extra_servo_cmd angle at each cycle start")
     intervals = find_motor_intervals(
         motor_events, args.active_pwm_threshold, bag_end
     )
@@ -773,14 +646,13 @@ def main() -> int:
             interval,
             force_times,
             forces,
-            angle_forces,
+            servo_times,
+            servo_angles,
             args.flapping_periods[interval.pwm],
             args.settle_time,
             args.end_trim,
             args.servo_zero_angle,
             args.base_z_rotation,
-            args.servo_angle_min,
-            args.servo_angle_max,
             args.min_force_samples,
         )
         all_cycles.extend(interval_cycles)
@@ -804,13 +676,6 @@ def main() -> int:
             )
         )
     plot_error(summaries)
-    plot_servo_angle_comparison(
-        all_cycles,
-        intervals,
-        servo_times,
-        servo_angles,
-    )
-    plt.show()
     return 0
 
 
