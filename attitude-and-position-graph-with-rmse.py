@@ -16,12 +16,12 @@ except Exception:
 # ---------------- color style ----------------
 
 PALETTE = {
-    "blue": "#92B1D9",
-    "pale_blue": "#C1D8E9",
-    "lavender": "#DBDDEF",
-    "peach": "#F6C8B6",
-    "gray": "#D4D4D4",
-    "dark": "#4A4A4A",
+    "blue": "#1F77B4",
+    "pale_blue": "#17BECF",
+    "lavender": "#9467BD",
+    "peach": "#D62728",
+    "gray": "#7F7F7F",
+    "dark": "#000000",
 }
 
 TARGET_COLOR = PALETTE["peach"]
@@ -80,6 +80,32 @@ def _interp1(t_src, y_src, t_dst):
 
     y = np.interp(t_dst, t_src, y_src)
     y[(t_dst < t_src[0]) | (t_dst > t_src[-1])] = np.nan
+    return y
+
+
+def _interp_previous(t_src, y_src, t_dst):
+    """直前の指令値を次の指令時刻まで保持する（範囲外はnan）。"""
+    t_src = np.asarray(t_src, float)
+    y_src = np.asarray(y_src, float)
+    t_dst = np.asarray(t_dst, float)
+
+    m = np.isfinite(t_src) & np.isfinite(y_src)
+    t_src, y_src = t_src[m], y_src[m]
+    if len(t_src) == 0:
+        return np.full_like(t_dst, np.nan)
+
+    order = np.argsort(t_src, kind="stable")
+    t_src, y_src = t_src[order], y_src[order]
+
+    src_index = np.searchsorted(t_src, t_dst, side="right") - 1
+    in_range = (
+        np.isfinite(t_dst)
+        & (t_dst >= t_src[0])
+        & (t_dst <= t_src[-1])
+    )
+
+    y = np.full_like(t_dst, np.nan)
+    y[in_range] = y_src[src_index[in_range]]
     return y
 
 
@@ -336,7 +362,7 @@ def main():
     ap.add_argument(
         "--roll-lpf-cutoff",
         type=float,
-        default=60.0,
+        default=30.0,
         help="Butterworth low-pass cutoff frequency for actual roll [Hz]",
     )
     ap.add_argument(
@@ -350,7 +376,7 @@ def main():
     ap.add_argument(
         "--pitch-lpf-cutoff",
         type=float,
-        default=60.0,
+        default=30.0,
         help="Butterworth low-pass cutoff frequency for actual pitch [Hz]",
     )
     ap.add_argument(
@@ -545,8 +571,8 @@ def main():
         raise ValueError("Attitude actual has too few samples in the RMSE window (need >=2).")
 
     if has_desired:
-        roll_tgt_on_act_rmse = _interp1(t_at, roll_tgt, t_act_rmse)
-        pitch_tgt_on_act_rmse = _interp1(t_at, pitch_tgt, t_act_rmse)
+        roll_tgt_on_act_rmse = _interp_previous(t_at, roll_tgt, t_act_rmse)
+        pitch_tgt_on_act_rmse = _interp_previous(t_at, pitch_tgt, t_act_rmse)
     else:
         roll_tgt_on_act_rmse = np.zeros_like(t_act_rmse, dtype=float)
         pitch_tgt_on_act_rmse = np.zeros_like(t_act_rmse, dtype=float)
@@ -567,16 +593,16 @@ def main():
         raise ValueError("Attitude actual has too few samples in the plot window (need >=2).")
 
     if has_desired:
-        roll_tgt_on_act = _interp1(t_at, roll_tgt, t_act)
-        pitch_tgt_on_act = _interp1(t_at, pitch_tgt, t_act)
+        roll_tgt_on_act = _interp_previous(t_at, roll_tgt, t_act)
+        pitch_tgt_on_act = _interp_previous(t_at, pitch_tgt, t_act)
     else:
         roll_tgt_on_act = np.zeros_like(t_act, dtype=float)
         pitch_tgt_on_act = np.zeros_like(t_act, dtype=float)
 
     print("=== Tracking RMSE ===")
     print(f"x RMSE    : {rmse_x:.6f}")
-    print(f"roll RMSE : {rmse_roll:.6f} rad  (target interpolated; actual=LPF applied)")
-    print(f"pitch RMSE: {rmse_pitch:.6f} rad  (target interpolated; actual=LPF applied)")
+    print(f"roll RMSE : {rmse_roll:.6f} rad  (target held; actual=LPF applied)")
+    print(f"pitch RMSE: {rmse_pitch:.6f} rad  (target held; actual=LPF applied)")
 
     # ---------- vibration analysis (continuous actual in plot window) ----------
 
@@ -692,6 +718,7 @@ def main():
         color=TARGET_COLOR,
         linewidth=4.0,
         linestyle="--",
+        drawstyle="steps-post",
         label="target",
     )
     plt.plot(
@@ -764,6 +791,7 @@ def main():
         color=TARGET_COLOR,
         linewidth=4.0,
         linestyle="--",
+        drawstyle="steps-post",
         label="target",
     )
     plt.plot(

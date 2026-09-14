@@ -118,29 +118,38 @@ def _lowpass_filtfilt(x, fs, fc_hz, order=4):
     return y
 
 
-def _find_start_time_by_target_change(t_nav, x_tgt, threshold_time=1771146720.0, eps=1e-9):
+def _find_start_time_by_target_change(
+    t_nav,
+    x_tgt,
+    y_tgt,
+    threshold_time=1771146720.0,
+    eps=1e-9,
+):
     """
-    t_nav >= threshold_time の範囲で、target_pos_x が「初めて変化」した時刻を返す。
-    変化判定は abs(diff) > eps。
+    t_nav >= threshold_time の範囲で、target_pos_x または target_pos_y が
+    「初めて変化」した時刻を返す。変化判定は各軸の abs(diff) > eps。
     見つからない場合は threshold_time 以降で最初に存在するサンプル時刻（なければ NaN）。
     """
     t_nav = np.asarray(t_nav, float)
     x_tgt = np.asarray(x_tgt, float)
+    y_tgt = np.asarray(y_tgt, float)
 
-    m = np.isfinite(t_nav) & np.isfinite(x_tgt)
-    t_nav, x_tgt = t_nav[m], x_tgt[m]
+    m = np.isfinite(t_nav) & np.isfinite(x_tgt) & np.isfinite(y_tgt)
+    t_nav, x_tgt, y_tgt = t_nav[m], x_tgt[m], y_tgt[m]
     if len(t_nav) < 2:
         return float("nan")
 
     idx = np.argsort(t_nav)
-    t_nav, x_tgt = t_nav[idx], x_tgt[idx]
+    t_nav, x_tgt, y_tgt = t_nav[idx], x_tgt[idx], y_tgt[idx]
 
     k0 = int(np.searchsorted(t_nav, threshold_time, side="left"))
     if k0 >= len(t_nav):
         return float("nan")
 
     for i in range(max(k0 + 1, 1), len(t_nav)):
-        if abs(x_tgt[i] - x_tgt[i - 1]) > eps:
+        x_changed = abs(x_tgt[i] - x_tgt[i - 1]) > eps
+        y_changed = abs(y_tgt[i] - y_tgt[i - 1]) > eps
+        if x_changed or y_changed:
             return float(t_nav[i])
 
     return float(t_nav[k0])
@@ -174,7 +183,7 @@ def main():
     ap.add_argument("--start-threshold-time", type=float, default=1771146720.0,
                     help="start condition threshold time [sec] (default: 1771146720)")
     ap.add_argument("--target-change-eps", type=float, default=1e-9,
-                    help="abs(diff) > eps regarded as change for target_pos_x")
+                    help="abs(diff) > eps regarded as change for target_pos_x/y")
 
     # lowpass for plots (error only)
     ap.add_argument("--plot-lp-fc-pos", type=float, default=5.0,
@@ -313,9 +322,9 @@ def main():
     if len(t_aa) < 2:
         raise ValueError("Attitude actual topic has too few samples (need >=2).")
 
-    # ---------- determine start time by target_pos_x change ----------
+    # ---------- determine start time by target_pos_x/y change ----------
     start_time = _find_start_time_by_target_change(
-        t_nav, x_tgt,
+        t_nav, x_tgt, y_tgt,
         threshold_time=args.start_threshold_time,
         eps=args.target_change_eps,
     )
@@ -365,7 +374,7 @@ def main():
     print("analysis window:",
           f"start_time={start_time:.6f}",
           f"end_time={end_time:.6f}",
-          f"(start triggered by first change of target_pos_x after {args.start_threshold_time:.0f}s)")
+          f"(start triggered by first change of target_pos_x/y after {args.start_threshold_time:.0f}s)")
 
     # ---------- position RMSE (nav target timebase in window) ----------
     x_act_i = _interp1(t_pa, x_act, t_nav_w)
@@ -500,8 +509,8 @@ def main():
     plt.plot(ta, pitch_act_plot, linewidth=1.6)
 
     # yaw
-    # plt.plot(ta, yaw_tgt_plot,   linewidth=1.6)
-    # plt.plot(ta, yaw_act_plot,   linewidth=1.6)
+    plt.plot(ta, yaw_tgt_plot,   linewidth=1.6)
+    plt.plot(ta, yaw_act_plot,   linewidth=1.6)
 
     plt.xlabel("time [s]")
     plt.ylabel("attitude [rad]")
