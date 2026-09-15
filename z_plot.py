@@ -1,3 +1,4 @@
+import argparse
 import rosbag
 import matplotlib.pyplot as plt
 import math
@@ -6,16 +7,28 @@ from tf.transformations import euler_from_quaternion
 from scipy.signal import butter, filtfilt
 
 
-bag_path = "2026-03-16-14-17-35-perching-success.bag"
+parser = argparse.ArgumentParser()
+parser.add_argument("bag_path", help="解析するrosbagファイルのパス")
+parser.add_argument(
+    "--trim-start",
+    type=float,
+    default=15.0,
+    help="この相対時刻より前をプロットから除外する [s] (default: 15.0)",
+)
+args = parser.parse_args()
+
+bag_path = args.bag_path
 
 pid_topic = "/crobat/debug/pose/pid"
 odom_topic = "/crobat/uav/baselink/odom"
 desire_topic = "/crobat/desire_coordinate"
 
 t_pid = []
+x_target = []
 z_target = []
 
 t_odom = []
+x_actual = []
 z_actual = []
 roll_actual = []
 
@@ -57,13 +70,15 @@ with rosbag.Bag(bag_path, "r") as bag:
         ts_rel = ts - t0
 
         if topic == pid_topic:
-            val = msg.z.target_p
-            if not math.isnan(val) and abs(val) > 1e-6:
+            z_val = msg.z.target_p
+            if not math.isnan(z_val) and abs(z_val) > 1e-6:
                 t_pid.append(ts_rel)
-                z_target.append(val)
+                x_target.append(msg.x.target_p)
+                z_target.append(z_val)
 
         elif topic == odom_topic:
             t_odom.append(ts_rel)
+            x_actual.append(msg.pose.pose.position.x)
             z_actual.append(msg.pose.pose.position.z)
 
             q = msg.pose.pose.orientation
@@ -89,24 +104,36 @@ roll_actual_lp = butter_lowpass_filter(
 
 # z target が出ている時間範囲だけ抽出
 t_odom_filtered = []
+x_actual_filtered = []
 z_actual_filtered = []
 roll_actual_filtered = []
 
 t_pid_filtered = []
+x_target_filtered = []
 z_target_filtered = []
 
 if len(t_pid) > 0:
-    t_min = min(t_pid)
+    t_min = max(min(t_pid), args.trim_start)
     t_max = max(t_pid)
 
-    for t, z in zip(t_pid, z_target):
+    if t_min > t_max:
+        raise ValueError(
+            f"trim start ({args.trim_start:.3f} s) is later than "
+            f"the available data end ({t_max:.3f} s)"
+        )
+
+    print(f"plot time range: {t_min:.3f}–{t_max:.3f} s")
+
+    for t, x, z in zip(t_pid, x_target, z_target):
         if t_min <= t <= t_max:
             t_pid_filtered.append(t)
+            x_target_filtered.append(x)
             z_target_filtered.append(z)
 
-    for t, z, r in zip(t_odom, z_actual, roll_actual_lp):
+    for t, x, z, r in zip(t_odom, x_actual, z_actual, roll_actual_lp):
         if t_min <= t <= t_max:
             t_odom_filtered.append(t)
+            x_actual_filtered.append(x)
             z_actual_filtered.append(z)
             roll_actual_filtered.append(r)
 else:
@@ -175,19 +202,26 @@ ax2 = ax1.twinx()
 ax1.plot(t_pid_filtered, z_target_filtered, linestyle="--", color="blue", lw=5)
 ax1.plot(t_odom_filtered, z_actual_filtered, linestyle="-", color="blue", lw=5)
 
+# x: 緑
+ax1.plot(t_pid_filtered, x_target_filtered, linestyle="--", color="green", lw=5)
+ax1.plot(t_odom_filtered, x_actual_filtered, linestyle="-", color="green", lw=5)
+
 # roll: 赤
 if len(t_roll_target_plot) > 0:
     ax2.plot(t_roll_target_plot, roll_target_plot, linestyle="--", color="red", lw=5)
 ax2.plot(t_odom_filtered, roll_actual_filtered, linestyle="-", color="red", lw=5)
 
+if t_min is not None:
+    ax1.set_xlim(t_min, t_max)
+
 ax1.set_xlabel("Time [s]")
-ax1.set_ylabel("Z [m]")
+ax1.set_ylabel("Position [m]")
 ax2.set_ylabel("Roll [rad]")
 
 ax1.tick_params(axis="y")
 ax2.tick_params(axis="y")
 
 ax1.grid(False)
-plt.title("Z and Roll")
+plt.title("X, Z and Roll")
 plt.tight_layout()
 plt.show()

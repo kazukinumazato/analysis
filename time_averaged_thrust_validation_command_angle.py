@@ -457,12 +457,47 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
     return summaries
 
 
-def plot_error(summaries: Sequence[dict]) -> None:
+def filter_summaries(
+    summaries: Sequence[dict],
+    pwm_values: Optional[Sequence[float]] = None,
+    speed_min: Optional[float] = None,
+    speed_max: Optional[float] = None,
+) -> List[dict]:
+    filtered = list(summaries)
+
+    if pwm_values is not None:
+        pwm_set = {float(pwm) for pwm in pwm_values}
+        filtered = [row for row in filtered if float(row["pwm"]) in pwm_set]
+
+    if speed_min is not None:
+        filtered = [
+            row for row in filtered if float(row["speed_deg_s"]) >= float(speed_min)
+        ]
+    if speed_max is not None:
+        filtered = [
+            row for row in filtered if float(row["speed_deg_s"]) <= float(speed_max)
+        ]
+
+    return filtered
+
+
+def plot_error(
+    summaries: Sequence[dict],
+    pwm_values: Optional[Sequence[float]] = None,
+    speed_min: Optional[float] = None,
+    speed_max: Optional[float] = None,
+) -> None:
+    filtered = filter_summaries(summaries, pwm_values, speed_min, speed_max)
+    if not filtered:
+        raise ValueError(
+            "no summaries remain after applying the PWM and speed filters"
+        )
+
     figure, axis = plt.subplots(figsize=(7.2, 4.8))
-    pwm_values = sorted({row["pwm"] for row in summaries})
-    for pwm in pwm_values:
+    selected_pwm_values = sorted({row["pwm"] for row in filtered})
+    for pwm in selected_pwm_values:
         rows = sorted(
-            (row for row in summaries if row["pwm"] == pwm),
+            (row for row in filtered if row["pwm"] == pwm),
             key=lambda row: row["speed_deg_s"],
         )
         axis.plot(
@@ -471,13 +506,15 @@ def plot_error(summaries: Sequence[dict]) -> None:
             marker="o",
             linewidth=1.8,
             markersize=5.5,
-            label="PWM {:.2f}".format(pwm),
         )
 
     axis.set_xlabel("Servo angular velocity [deg/s]")
     axis.set_ylabel("Relative error norm of mean cycle-averaged force [%]")
-    axis.set_title("Validation of the time-averaged thrust model")
-    axis.grid(True, alpha=0.3)
+    title = "Validation of the time-averaged thrust model"
+    if pwm_values is not None or speed_min is not None or speed_max is not None:
+        title += " (filtered)"
+    axis.set_title(title)
+    axis.grid(False)
     axis.legend()
     figure.tight_layout()
     plt.show()
@@ -561,6 +598,25 @@ def parse_arguments() -> argparse.Namespace:
         type=int,
         default=2,
         help="minimum interior force samples required per flapping cycle",
+    )
+    parser.add_argument(
+        "--pwm-selection",
+        type=comma_separated_floats,
+        default=None,
+        metavar="PWM1,PWM2,...",
+        help="optional subset of PWM values to plot and summarize (for example 0.70,0.75)",
+    )
+    parser.add_argument(
+        "--speed-min",
+        type=float,
+        default=None,
+        help="optional minimum servo angular speed to include in the filtered plot",
+    )
+    parser.add_argument(
+        "--speed-max",
+        type=float,
+        default=None,
+        help="optional maximum servo angular speed to include in the filtered plot",
     )
     return parser.parse_args()
 
@@ -664,8 +720,19 @@ def main() -> int:
             "force data"
         )
 
+    filtered_summaries = filter_summaries(
+        summaries,
+        args.pwm_selection,
+        args.speed_min,
+        args.speed_max,
+    )
+    if not filtered_summaries:
+        raise ValueError(
+            "no results remain after applying the selected PWM and speed filters"
+        )
+
     print("\nSummary:")
-    for row in summaries:
+    for row in filtered_summaries:
         mean_force = row["mean_force_N"]
         print(
             "  PWM {pwm:.2f}, {speed_deg_s:>4.1f} deg/s: "
@@ -675,7 +742,12 @@ def main() -> int:
                 mean_force[0], mean_force[1], mean_force[2], **row
             )
         )
-    plot_error(summaries)
+    plot_error(
+        summaries,
+        pwm_values=args.pwm_selection,
+        speed_min=args.speed_min,
+        speed_max=args.speed_max,
+    )
     return 0
 
 
