@@ -84,6 +84,49 @@ def _zoh_hold(t_src, y_src, t_dst):
     return y
 
 
+def _state_mask_after_delay(
+    t_state,
+    state_values,
+    t_samples,
+    target_state,
+    delay_sec,
+):
+    """target_stateへ遷移してdelay_sec経過した時刻だけを選ぶ。"""
+    t_state = np.asarray(t_state, float)
+    state_values = np.asarray(state_values, float)
+    t_samples = np.asarray(t_samples, float)
+
+    m = np.isfinite(t_state) & np.isfinite(state_values)
+    t_state, state_values = t_state[m], state_values[m]
+
+    if len(t_state) == 0:
+        return np.zeros_like(t_samples, dtype=bool)
+
+    order = np.argsort(t_state, kind="stable")
+    t_state, state_values = t_state[order], state_values[order]
+
+    state_entry_time = np.empty_like(t_state)
+    entry_time = t_state[0]
+    state_entry_time[0] = entry_time
+
+    for i in range(1, len(t_state)):
+        if state_values[i] != state_values[i - 1]:
+            entry_time = t_state[i]
+        state_entry_time[i] = entry_time
+
+    state_index = np.searchsorted(t_state, t_samples, side="right") - 1
+    valid = state_index >= 0
+    mask = np.zeros_like(t_samples, dtype=bool)
+
+    index = state_index[valid]
+    mask[valid] = (
+        (state_values[index] == target_state)
+        & (t_samples[valid] >= state_entry_time[index] + delay_sec)
+    )
+
+    return mask
+
+
 def _estimate_fs(t):
     t = np.asarray(t, float)
     t = t[np.isfinite(t)]
@@ -269,6 +312,12 @@ def main():
         default=5,
         help="この値のときだけデータを抽出する（default: 5）",
     )
+    ap.add_argument(
+        "--hover-delay-sec",
+        type=float,
+        default=0.0,
+        help="hover状態へ遷移してから解析を始めるまでの待ち時間 [s] (default: 0)",
+    )
 
     # lowpass for plots
     ap.add_argument(
@@ -304,6 +353,9 @@ def main():
     )
 
     args = ap.parse_args()
+
+    if args.hover_delay_sec < 0:
+        raise ValueError("--hover-delay-sec must be >= 0")
 
     # ---------- storage ----------
 
@@ -421,6 +473,7 @@ def main():
         "flight_state", args.flight_state_topic,
     )
     print("flight_state filter value:", args.flight_state_value)
+    print("hover delay:", f"{args.hover_delay_sec:.3f} s")
     print("error sign:", args.error_sign)
 
     if len(t_pa) < 2:
@@ -510,11 +563,20 @@ def main():
 
     # ---------- filter by flight_state ----------
 
-    fs_on_pa = _zoh_hold(t_fs, fs_val, t_pa)
-    mask_pa = fs_on_pa == args.flight_state_value
-
-    fs_on_aa = _zoh_hold(t_fs, fs_val, t_aa)
-    mask_aa = fs_on_aa == args.flight_state_value
+    mask_pa = _state_mask_after_delay(
+        t_fs,
+        fs_val,
+        t_pa,
+        args.flight_state_value,
+        args.hover_delay_sec,
+    )
+    mask_aa = _state_mask_after_delay(
+        t_fs,
+        fs_val,
+        t_aa,
+        args.flight_state_value,
+        args.hover_delay_sec,
+    )
 
     t_pa = t_pa[mask_pa]
     x_act = x_act[mask_pa]
@@ -649,6 +711,45 @@ def main():
         roll_err = np.asarray([], float)
         pitch_err = np.asarray([], float)
         yaw_err = np.asarray([], float)
+
+    # ---------- RMSE ----------
+
+    def _rmse(a, b):
+        a = np.asarray(a, float)
+        b = np.asarray(b, float)
+        m = np.isfinite(a) & np.isfinite(b)
+        if np.count_nonzero(m) == 0:
+            return float("nan")
+        return float(np.sqrt(np.mean((a[m] - b[m]) ** 2)))
+
+    x_rmse = _rmse(x_plot, x_tgt_on_pa)
+    y_rmse = _rmse(y_plot, y_tgt_on_pa)
+    z_rmse = _rmse(z_plot, z_tgt_on_pa)
+
+    if has_att_target:
+        roll_rmse = _rmse(roll_plot, roll_tgt_on_aa)
+        pitch_rmse = _rmse(pitch_plot, pitch_tgt_on_aa)
+        yaw_rmse = _rmse(yaw_plot, yaw_tgt_on_aa)
+    else:
+        roll_rmse = float("nan")
+        pitch_rmse = float("nan")
+        yaw_rmse = float("nan")
+
+    unit_pos = "m"
+    unit_att = "deg" if args.attitude_in_deg else "rad"
+
+    print("=== RMSE (6-axis) ===")
+    print(f"x RMSE      : {x_rmse:.6f} {unit_pos}")
+    print(f"y RMSE      : {y_rmse:.6f} {unit_pos}")
+    print(f"z RMSE      : {z_rmse:.6f} {unit_pos}")
+    if has_att_target:
+        print(f"roll RMSE   : {roll_rmse:.6f} {unit_att}")
+        print(f"pitch RMSE  : {pitch_rmse:.6f} {unit_att}")
+        print(f"yaw RMSE    : {yaw_rmse:.6f} {unit_att}")
+    else:
+        print("roll RMSE   : nan (attitude target not available)")
+        print("pitch RMSE  : nan (attitude target not available)")
+        print("yaw RMSE    : nan (attitude target not available)")
 
     # ---------- plots ----------
 

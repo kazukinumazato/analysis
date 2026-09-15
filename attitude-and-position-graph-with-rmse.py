@@ -960,11 +960,11 @@ def main():
                 ax_high.tick_params(labelbottom=False)
 
                 ax_low.set_xlabel("frequency [Hz]")
-                ax_low.set_ylabel("")
-                ax_high.set_ylabel("")
+                ax_low.set_ylabel("power (a.u.)")
+                ax_high.set_ylabel("power (a.u.)")
 
-                ax_high.tick_params(labelleft=False)
-                ax_low.tick_params(labelleft=False)
+                ax_high.tick_params(labelleft=True)
+                ax_low.tick_params(labelleft=True)
 
                 ax_high.set_title(title)
 
@@ -975,8 +975,8 @@ def main():
                 ax_high.spines["bottom"].set_visible(False)
                 ax_low.spines["top"].set_visible(False)
                 ax_high.tick_params(labelbottom=False)
-                ax_high.tick_params(labelleft=False)
-                ax_low.tick_params(labelleft=False)
+                ax_high.tick_params(labelleft=True)
+                ax_low.tick_params(labelleft=True)
 
                 # 軸ブレークを示す斜線
                 d = 0.020
@@ -1098,11 +1098,11 @@ def main():
                 ax_high.tick_params(labelbottom=False)
 
                 ax_low.set_xlabel("frequency [Hz]")
-                ax_low.set_ylabel("")
-                ax_high.set_ylabel("")
+                ax_low.set_ylabel("power (a.u.)")
+                ax_high.set_ylabel("power (a.u.)")
 
-                ax_high.tick_params(labelleft=False)
-                ax_low.tick_params(labelleft=False)
+                ax_high.tick_params(labelleft=True)
+                ax_low.tick_params(labelleft=True)
 
                 ax_high.set_title(title)
 
@@ -1112,8 +1112,8 @@ def main():
                 ax_high.spines["bottom"].set_visible(False)
                 ax_low.spines["top"].set_visible(False)
                 ax_high.tick_params(labelbottom=False)
-                ax_high.tick_params(labelleft=False)
-                ax_low.tick_params(labelleft=False)
+                ax_high.tick_params(labelleft=True)
+                ax_low.tick_params(labelleft=True)
 
                 d = 0.020
 
