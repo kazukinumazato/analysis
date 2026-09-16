@@ -142,8 +142,8 @@ def _moving_average(x, win):
     return y
 
 
-def _uniform_resample(t, x, fs):
-    """不等間隔(t,x)を fs で等間隔化して返す（DC除去）"""
+def _uniform_resample(t, x, fs, remove_mean=True):
+    """不等間隔(t,x)を fs で等間隔化して返す。"""
     t = np.asarray(t, float)
     x = np.asarray(x, float)
 
@@ -158,7 +158,8 @@ def _uniform_resample(t, x, fs):
 
     tu = np.arange(t[0], t[-1], 1.0 / fs)
     xu = np.interp(tu, t, x)
-    xu = xu - np.mean(xu)
+    if remove_mean:
+        xu = xu - np.mean(xu)
 
     return tu, xu, fs
 
@@ -323,6 +324,143 @@ def _analyze_vibration_fft(name, t, vibration, fs, fft_fmax, flap_flo, flap_fhi)
     return freqs, power, dominant_frequency, band
 
 
+def _analyze_peak_contribution_to_roll_error(
+    t,
+    roll_error,
+    fs,
+    source_peak_frequency,
+    peak_band_half_width,
+    fft_fmax,
+):
+    """Quantify the source FFT peak's energy in the roll tracking error.
+
+    Two related ratios are returned:
+
+    - ``ac_power_ratio``: peak-band power divided by all non-DC error power,
+      calculated from an unwindowed FFT using Parseval's relation.
+    - ``tracking_mse_ratio``: RMS-squared of an FFT-reconstructed peak-band
+      error divided by the total roll tracking-error MSE (including DC bias).
+
+    These are frequency-energy attributions, not causal contribution ratios.
+    """
+    result = {
+        "time": None,
+        "error": None,
+        "band_error": None,
+        "freqs": None,
+        "power": None,
+        "source_peak_frequency": float(source_peak_frequency),
+        "error_peak_frequency": float("nan"),
+        "band_low": float("nan"),
+        "band_high": float("nan"),
+        "ac_power_ratio": float("nan"),
+        "total_error_rmse": float("nan"),
+        "band_error_rms": float("nan"),
+        "tracking_mse_ratio": float("nan"),
+        "rms_ratio": float("nan"),
+    }
+
+    if not np.isfinite(source_peak_frequency):
+        print("Roll peak contribution: source peak frequency is invalid.")
+        return result
+    if peak_band_half_width <= 0:
+        raise ValueError("--peak-band-half-width must be > 0 Hz.")
+
+    finite_error = np.asarray(roll_error, float)
+    finite_error = finite_error[np.isfinite(finite_error)]
+    if len(finite_error) == 0:
+        print("Roll peak contribution: roll error is empty.")
+        return result
+    total_error_rmse = float(np.sqrt(np.mean(finite_error ** 2)))
+
+    t_u, error_u, fs_u = _uniform_resample(
+        t,
+        roll_error,
+        fs,
+        remove_mean=False,
+    )
+    if t_u is None:
+        print("Roll peak contribution: resampling failed.")
+        return result
+
+    error_ac = error_u - np.mean(error_u)
+    freqs, mag, power = _fft_spectra(error_ac, fs_u)
+    if freqs is None:
+        print("Roll peak contribution: FFT failed (n too small).")
+        return result
+
+    nyquist = 0.5 * fs_u
+    total_fmax = min(float(fft_fmax), nyquist)
+    band_low = max(0.0, source_peak_frequency - peak_band_half_width)
+    band_high = min(nyquist, source_peak_frequency + peak_band_half_width)
+    if band_high <= band_low:
+        print("Roll peak contribution: peak band is outside the available spectrum.")
+        return result
+
+    error_peak_frequency, _ = _dominant_peak(
+        freqs,
+        mag,
+        fmin=0.1,
+        fmax=total_fmax,
+    )
+    # Reconstruct only the selected band from the unwindowed, DC-removed error.
+    # Because FFT bands are orthogonal, its squared RMS is an MSE contribution.
+    spectrum = np.fft.rfft(error_ac)
+    reconstruction_freqs = np.fft.rfftfreq(len(error_ac), d=1.0 / fs_u)
+    band_mask = (
+        (reconstruction_freqs >= band_low)
+        & (reconstruction_freqs <= band_high)
+    )
+    band_spectrum = np.zeros_like(spectrum)
+    band_spectrum[band_mask] = spectrum[band_mask]
+    band_error = np.fft.irfft(band_spectrum, n=len(error_ac))
+    band_error_rms = float(np.sqrt(np.mean(band_error ** 2)))
+    ac_error_rms = float(np.sqrt(np.mean(error_ac ** 2)))
+
+    if total_error_rmse > 0:
+        tracking_mse_ratio = (band_error_rms / total_error_rmse) ** 2
+        rms_ratio = band_error_rms / total_error_rmse
+    else:
+        tracking_mse_ratio = float("nan")
+        rms_ratio = float("nan")
+    ac_power_ratio = (
+        (band_error_rms / ac_error_rms) ** 2
+        if ac_error_rms > 0
+        else float("nan")
+    )
+
+    result.update(
+        {
+            "time": t_u,
+            "error": error_u,
+            "band_error": band_error,
+            "freqs": freqs,
+            "power": power,
+            "error_peak_frequency": error_peak_frequency,
+            "band_low": band_low,
+            "band_high": band_high,
+            "ac_power_ratio": ac_power_ratio,
+            "total_error_rmse": total_error_rmse,
+            "band_error_rms": band_error_rms,
+            "tracking_mse_ratio": tracking_mse_ratio,
+            "rms_ratio": rms_ratio,
+        }
+    )
+
+    print("=== Roll FFT-peak contribution to tracking error ===")
+    print(f"roll-vibration peak       : {source_peak_frequency:.3f} Hz")
+    print(f"roll-error FFT peak       : {error_peak_frequency:.3f} Hz")
+    print(f"evaluated peak band       : {band_low:.3f}–{band_high:.3f} Hz")
+    print(f"peak-band / AC error power: {ac_power_ratio * 100.0:.2f} %")
+    print(f"total roll-error RMSE     : {total_error_rmse:.6f} rad")
+    print(f"peak-band error RMS       : {band_error_rms:.6f} rad")
+    print(f"peak-band RMS / total RMSE: {rms_ratio * 100.0:.2f} %")
+    print(f"peak-band MSE contribution: {tracking_mse_ratio * 100.0:.2f} %")
+    print("note: contribution means frequency-energy attribution, not causality")
+
+    return result
+
+
 # ---------------- main ----------------
 
 def main():
@@ -357,6 +495,15 @@ def main():
     ap.add_argument("--fft-fmax", type=float, default=60.0)
     ap.add_argument("--flap-flo", type=float, default=12.0)
     ap.add_argument("--flap-fhi", type=float, default=20.0)
+    ap.add_argument(
+        "--peak-band-half-width",
+        type=float,
+        default=0.5,
+        help=(
+            "half-width [Hz] around the roll-vibration FFT peak used to "
+            "quantify its contribution to roll tracking error (default: 0.5)"
+        ),
+    )
 
     # roll LPF
     ap.add_argument(
@@ -577,6 +724,7 @@ def main():
         roll_tgt_on_act_rmse = np.zeros_like(t_act_rmse, dtype=float)
         pitch_tgt_on_act_rmse = np.zeros_like(t_act_rmse, dtype=float)
 
+    roll_error_rmse = roll_act_rmse - roll_tgt_on_act_rmse
     rmse_roll = _rmse(roll_tgt_on_act_rmse, roll_act_rmse)
     rmse_pitch = _rmse(pitch_tgt_on_act_rmse, pitch_act_rmse)
 
@@ -680,6 +828,15 @@ def main():
         args.fft_fmax,
         args.flap_flo,
         args.flap_fhi,
+    )
+
+    roll_peak_error = _analyze_peak_contribution_to_roll_error(
+        t_act_rmse,
+        roll_error_rmse,
+        _estimate_fs(t_act_rmse),
+        roll_dom_f,
+        args.peak_band_half_width,
+        args.fft_fmax,
     )
 
     # ---------- plots ----------
@@ -854,6 +1011,74 @@ def main():
         f"f*={pitch_dom_f:.2f} Hz"
     )
     _apply_paper_style()
+
+    # roll FFT-peak contribution to the roll tracking error
+    if roll_peak_error["time"] is not None:
+        fig, (ax_time, ax_spectrum) = plt.subplots(
+            2,
+            1,
+            figsize=(8, 7),
+            constrained_layout=True,
+        )
+
+        contribution_time = roll_peak_error["time"]
+        relative_time = contribution_time - contribution_time[0]
+        ax_time.plot(
+            relative_time,
+            roll_peak_error["error"],
+            color=PALETTE["gray"],
+            linewidth=1.2,
+            label="roll tracking error",
+        )
+        ax_time.plot(
+            relative_time,
+            roll_peak_error["band_error"],
+            color=VIB_COLOR,
+            linewidth=1.8,
+            label="FFT peak-band component",
+        )
+        ax_time.set_xlabel("time [s]")
+        ax_time.set_ylabel("roll error [rad]")
+        ax_time.legend(frameon=False)
+        _apply_paper_style(ax_time)
+
+        contribution_freqs = roll_peak_error["freqs"]
+        contribution_power = roll_peak_error["power"]
+        spectrum_mask = (
+            (contribution_freqs >= 0.0)
+            & (contribution_freqs <= args.fft_fmax)
+        )
+        ax_spectrum.plot(
+            contribution_freqs[spectrum_mask],
+            contribution_power[spectrum_mask],
+            color=SPECTRUM_COLOR,
+            linewidth=1.5,
+            label="roll-error spectrum",
+        )
+        ax_spectrum.axvspan(
+            roll_peak_error["band_low"],
+            roll_peak_error["band_high"],
+            color=VIB_COLOR,
+            alpha=0.25,
+            label="evaluated peak band",
+        )
+        ax_spectrum.axvline(
+            roll_peak_error["source_peak_frequency"],
+            color=TREND_COLOR,
+            linestyle="--",
+            linewidth=1.2,
+            label="roll-vibration peak",
+        )
+        ax_spectrum.set_xlabel("frequency [Hz]")
+        ax_spectrum.set_ylabel("roll-error power (a.u.)")
+        ax_spectrum.legend(frameon=False)
+        _apply_paper_style(ax_spectrum)
+
+        fig.suptitle(
+            "Roll FFT-peak contribution to tracking error: "
+            f"AC power={roll_peak_error['ac_power_ratio'] * 100.0:.1f}%, "
+            f"MSE={roll_peak_error['tracking_mse_ratio'] * 100.0:.1f}%"
+        )
 
     # spectrum with directly specified broken y-axis
     if roll_freqs is not None and roll_power is not None:

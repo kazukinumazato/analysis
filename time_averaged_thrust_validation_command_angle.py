@@ -486,6 +486,9 @@ def plot_error(
     pwm_values: Optional[Sequence[float]] = None,
     speed_min: Optional[float] = None,
     speed_max: Optional[float] = None,
+    show_legend: bool = True,
+    line_width: float = 2.8,
+    marker_size: float = 7.0,
 ) -> None:
     filtered = filter_summaries(summaries, pwm_values, speed_min, speed_max)
     if not filtered:
@@ -503,9 +506,10 @@ def plot_error(
         axis.plot(
             [row["speed_deg_s"] for row in rows],
             [row["relative_error_percent"] for row in rows],
+            label="PWM {:.2f}".format(pwm),
             marker="o",
-            linewidth=1.8,
-            markersize=5.5,
+            linewidth=line_width,
+            markersize=marker_size,
         )
 
     axis.set_xlabel("Servo angular velocity [deg/s]")
@@ -515,7 +519,8 @@ def plot_error(
         title += " (filtered)"
     axis.set_title(title)
     axis.grid(False)
-    axis.legend()
+    if show_legend:
+        axis.legend()
     figure.tight_layout()
     plt.show()
 
@@ -601,10 +606,15 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pwm-selection",
+        dest="pwm_selection",
         type=comma_separated_floats,
+        action="append",
         default=None,
         metavar="PWM1,PWM2,...",
-        help="optional subset of PWM values to plot and summarize (for example 0.70,0.75)",
+        help=(
+            "optional subset of PWM values to plot and summarize (for example 0.70,0.75). "
+            "This option may be provided multiple times and values will be combined."
+        ),
     )
     parser.add_argument(
         "--speed-min",
@@ -618,11 +628,41 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="optional maximum servo angular speed to include in the filtered plot",
     )
+    parser.add_argument(
+        "--legend",
+        dest="legend",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="show or hide the plot legend (default: enabled)",
+    )
+    parser.add_argument(
+        "--line-width",
+        dest="line_width",
+        type=float,
+        default=2.8,
+        help="line width for plotted series (default: 2.8)",
+    )
+    parser.add_argument(
+        "--marker-size",
+        dest="marker_size",
+        type=float,
+        default=7.0,
+        help="marker size for plotted series (default: 7.0)",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_arguments()
+    # Flatten pwm_selection if provided so callers can supply the option
+    # multiple times or with comma-separated lists. The parser returns
+    # a list of lists when action='append' and type returns lists.
+    if args.pwm_selection is not None:
+        flattened: List[float] = []
+        for group in args.pwm_selection:
+            if group:
+                flattened.extend(group)
+        args.pwm_selection = flattened if flattened else None
     if args.settle_time < 0.0 or args.end_trim < 0.0:
         raise ValueError("--settle-time and --end-trim must be nonnegative")
     if args.min_force_samples < 1:
@@ -747,6 +787,9 @@ def main() -> int:
         pwm_values=args.pwm_selection,
         speed_min=args.speed_min,
         speed_max=args.speed_max,
+        show_legend=args.legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
     )
     return 0
 
