@@ -216,12 +216,13 @@ def _colored_violinplot(data_list, labels, ylabel, colors, alpha=0.82):
     """
     1つのグラフ内に複数のバイオリンプロットを並べて描く
     """
-    plt.figure()
+    fig, ax = plt.subplots(figsize=(3.6, 4.2))
 
-    parts = plt.violinplot(
+    parts = ax.violinplot(
         data_list,
         showmeans=True,
         showmedians=True,
+        widths=0.82,
     )
 
     for body, color in zip(parts["bodies"], colors):
@@ -250,8 +251,12 @@ def _colored_violinplot(data_list, labels, ylabel, colors, alpha=0.82):
         parts["cmaxes"].set_edgecolor(EDGE_COLOR)
         parts["cmaxes"].set_linewidth(0.9)
 
-    plt.xticks(range(1, len(labels) + 1), labels)
-    plt.ylabel(ylabel)
+    ax.set_xticks(range(1, len(labels) + 1))
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(ylabel)
+    ax.set_xlim(0.5, len(labels) + 0.5)
+    ax.margins(x=0.08)
+    fig.tight_layout()
 
     _apply_paper_style()
 

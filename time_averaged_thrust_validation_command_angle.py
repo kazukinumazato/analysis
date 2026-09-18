@@ -40,6 +40,7 @@ class CycleResult:
     servo_angle: float
     theta: float
     mean_force: np.ndarray
+    max_force_magnitude: float
     force_sample_count: int
 
 
@@ -384,6 +385,9 @@ def compute_cycle_results(
         mean_force = np.trapz(
             force_in_cycle_start_frame, integration_times, axis=0
         ) / (end - start)
+        max_force_magnitude = float(
+            np.max(np.linalg.norm(force_in_cycle_start_frame, axis=1))
+        )
         if np.all(np.isfinite(mean_force)):
             results.append(
                 CycleResult(
@@ -395,6 +399,7 @@ def compute_cycle_results(
                     servo_angle=servo_angle,
                     theta=theta,
                     mean_force=np.asarray(mean_force, dtype=float),
+                    max_force_magnitude=max_force_magnitude,
                     force_sample_count=sample_count,
                 )
             )
@@ -402,15 +407,15 @@ def compute_cycle_results(
 
 
 def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
-    grouped: Dict[Tuple[float, float], List[np.ndarray]] = defaultdict(list)
+    grouped: Dict[Tuple[float, float], List[CycleResult]] = defaultdict(list)
     for cycle in cycles:
-        grouped[(cycle.pwm, cycle.speed)].append(cycle.mean_force)
+        grouped[(cycle.pwm, cycle.speed)].append(cycle)
 
     summaries: List[dict] = []
     pwm_values = sorted({key[0] for key in grouped})
     for pwm in pwm_values:
-        fixed_cycle_vectors = grouped.get((pwm, 0.0), [])
-        if not fixed_cycle_vectors:
+        fixed_cycles = grouped.get((pwm, 0.0), [])
+        if not fixed_cycles:
             print(
                 "Warning: skipping PWM {:.2f}: no usable fixed-angle cycles".format(
                     pwm
@@ -418,7 +423,8 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
                 file=sys.stderr,
             )
             continue
-        fixed_mean = np.mean(np.vstack(fixed_cycle_vectors), axis=0)
+        fixed_cycle_vectors = np.vstack([cycle.mean_force for cycle in fixed_cycles])
+        fixed_mean = np.mean(fixed_cycle_vectors, axis=0)
         fixed_norm = float(np.linalg.norm(fixed_mean))
         if math.isclose(fixed_norm, 0.0, abs_tol=1.0e-12):
             raise ValueError(
@@ -427,8 +433,14 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
 
         speeds = sorted(speed for key_pwm, speed in grouped if key_pwm == pwm)
         for speed in speeds:
-            cycle_vectors = np.vstack(grouped[(pwm, speed)])
+            cycle_results = grouped[(pwm, speed)]
+            cycle_vectors = np.vstack([cycle.mean_force for cycle in cycle_results])
             mean_force = np.mean(cycle_vectors, axis=0)
+            peak_force_magnitudes = np.asarray(
+                [cycle.max_force_magnitude for cycle in cycle_results],
+                dtype=float,
+            )
+            mean_peak_force = float(np.mean(peak_force_magnitudes))
             if (
                 not math.isclose(speed, 0.0, abs_tol=1.0e-12)
                 and float(mean_force.dot(fixed_mean)) <= 0.0
@@ -447,11 +459,12 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
                 {
                     "pwm": pwm,
                     "speed_deg_s": speed,
-                    "cycle_count": len(cycle_vectors),
+                    "cycle_count": len(cycle_results),
                     "mean_force_N": mean_force,
                     "fixed_mean_force_N": fixed_mean,
                     "absolute_error_N": absolute_error,
                     "relative_error_percent": relative_error,
+                    "mean_peak_force_N": mean_peak_force,
                 }
             )
     return summaries
@@ -504,7 +517,7 @@ def plot_error(
             key=lambda row: row["speed_deg_s"],
         )
         axis.plot(
-            [row["speed_deg_s"] for row in rows],
+            np.deg2rad([row["speed_deg_s"] for row in rows]),
             [row["relative_error_percent"] for row in rows],
             label="PWM {:.2f}".format(pwm),
             marker="o",
@@ -512,7 +525,7 @@ def plot_error(
             markersize=marker_size,
         )
 
-    axis.set_xlabel("Servo angular velocity [deg/s]")
+    axis.set_xlabel("Servo angular velocity [rad/s]")
     axis.set_ylabel("Relative error norm of mean cycle-averaged force [%]")
     title = "Validation of the time-averaged thrust model"
     if pwm_values is not None or speed_min is not None or speed_max is not None:
@@ -620,13 +633,13 @@ def parse_arguments() -> argparse.Namespace:
         "--speed-min",
         type=float,
         default=None,
-        help="optional minimum servo angular speed to include in the filtered plot",
+        help="optional minimum servo angular speed in deg/s to include in the filtered plot",
     )
     parser.add_argument(
         "--speed-max",
         type=float,
         default=None,
-        help="optional maximum servo angular speed to include in the filtered plot",
+        help="optional maximum servo angular speed in deg/s to include in the filtered plot",
     )
     parser.add_argument(
         "--legend",
@@ -766,20 +779,28 @@ def main() -> int:
         args.speed_min,
         args.speed_max,
     )
-    if not filtered_summaries:
+    fixed_angle_summaries = [
+        row
+        for row in filtered_summaries
+        if math.isclose(float(row["speed_deg_s"]), 0.0, abs_tol=1.0e-12)
+    ]
+    if not fixed_angle_summaries:
         raise ValueError(
-            "no results remain after applying the selected PWM and speed filters"
+            "no fixed-angle results remain after applying the selected PWM and speed filters"
         )
 
-    print("\nSummary:")
-    for row in filtered_summaries:
+    print("\nSummary (fixed-angle only):")
+    for row in fixed_angle_summaries:
         mean_force = row["mean_force_N"]
+        mean_force_magnitude = float(np.linalg.norm(mean_force))
         print(
             "  PWM {pwm:.2f}, {speed_deg_s:>4.1f} deg/s: "
             "mean=({: .5f}, {: .5f}, {: .5f}) N, "
+            "mean force magnitude={: .5f} N, "
+            "avg max force magnitude={mean_peak_force_N:.5f} N, "
             "|delta mean|={absolute_error_N:.5f} N, "
             "error={relative_error_percent:6.2f}%, cycles={cycle_count}".format(
-                mean_force[0], mean_force[1], mean_force[2], **row
+                mean_force[0], mean_force[1], mean_force[2], mean_force_magnitude, **row
             )
         )
     plot_error(

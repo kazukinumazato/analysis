@@ -637,6 +637,9 @@ def plot_results(
     servo_cutoff_hz: float,
     window_title: str,
     target_rate_mode: str = "",
+    show_legend: bool = True,
+    line_width: float = 2.0,
+    marker_size: float = 6.0,
 ) -> None:
     rate = np.asarray([result.rate for result in results])
     show_target_rate = target_rate_mode in ("rising", "falling")
@@ -649,26 +652,69 @@ def plot_results(
         sharex=True,
     )
 
-    axes[0].plot(rate, [r.x_rmse for r in results], "o-", label="x")
-    axes[0].plot(rate, [r.y_rmse for r in results], "s-", label="y")
-    axes[0].plot(rate, [r.z_rmse for r in results], "^-", label="z")
+    axes[0].plot(
+        rate,
+        [r.x_rmse for r in results],
+        "o-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="x",
+    )
+    axes[0].plot(
+        rate,
+        [r.y_rmse for r in results],
+        "s-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="y",
+    )
+    axes[0].plot(
+        rate,
+        [r.z_rmse for r in results],
+        "^-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="z",
+    )
     axes[0].plot(
         rate,
         [r.position_norm_rmse for r in results],
         "D-",
-        linewidth=2.0,
+        linewidth=line_width,
+        markersize=marker_size,
         label=r"$\|e_{pos}\|$",
     )
     axes[0].set_ylabel("RMSE [m]")
-    axes[0].legend(ncol=4)
-    axes[0].grid(True, alpha=0.3)
+    if show_legend:
+        axes[0].legend(ncol=4)
 
-    axes[1].plot(rate, [r.roll_rmse for r in results], "o-", label="roll")
-    axes[1].plot(rate, [r.pitch_rmse for r in results], "s-", label="pitch")
-    axes[1].plot(rate, [r.yaw_rmse for r in results], "^-", label="yaw")
+    axes[1].plot(
+        rate,
+        [r.roll_rmse for r in results],
+        "o-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="roll",
+    )
+    axes[1].plot(
+        rate,
+        [r.pitch_rmse for r in results],
+        "s-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="pitch",
+    )
+    axes[1].plot(
+        rate,
+        [r.yaw_rmse for r in results],
+        "^-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="yaw",
+    )
     axes[1].set_ylabel("RMSE [rad]")
-    axes[1].legend(ncol=3)
-    axes[1].grid(True, alpha=0.3)
+    if show_legend:
+        axes[1].legend(ncol=3)
 
     markers = ["o", "s", "^", "v"]
     for column, (index, marker) in enumerate(zip(servo_indices, markers)):
@@ -676,18 +722,21 @@ def plot_results(
             rate,
             [result.servo_speed_means[column] for result in results],
             marker + "-",
+            linewidth=line_width,
+            markersize=marker_size,
             label=f"servo {index}",
         )
     axes[2].plot(
         rate,
         [result.servo_speed_mean for result in results],
         "D-",
-        linewidth=2.0,
+        linewidth=line_width,
+        markersize=marker_size,
         label="4-servo mean",
     )
     axes[2].set_ylabel(r"Mean $|\dot{\theta}|$ [rad/s]")
-    axes[2].legend(ncol=3)
-    axes[2].grid(True, alpha=0.3)
+    if show_legend:
+        axes[2].legend(ncol=3)
     axes[2].set_title(f"Servo angular-velocity LPF cutoff: {servo_cutoff_hz:g} Hz")
 
     for column, (index, marker) in enumerate(zip(servo_indices, markers)):
@@ -695,18 +744,21 @@ def plot_results(
             rate,
             [result.servo_speed_maxima[column] for result in results],
             marker + "-",
+            linewidth=line_width,
+            markersize=marker_size,
             label=f"servo {index}",
         )
     axes[3].plot(
         rate,
         [result.servo_speed_max_mean for result in results],
         "D-",
-        linewidth=2.0,
+        linewidth=line_width,
+        markersize=marker_size,
         label="4-servo mean",
     )
     axes[3].set_ylabel(r"Max $|\dot{\theta}|$ [rad/s]")
-    axes[3].legend(ncol=3)
-    axes[3].grid(True, alpha=0.3)
+    if show_legend:
+        axes[3].legend(ncol=3)
 
     if show_target_rate:
         if target_rate_mode == "rising":
@@ -725,20 +777,21 @@ def plot_results(
             rate,
             measured_rate,
             "o-",
-            linewidth=2.0,
+            linewidth=line_width,
+            markersize=marker_size,
             label=rate_label,
         )
         axes[4].plot(
             rate,
             rate,
             "--",
-            linewidth=1.5,
+            linewidth=line_width,
             color="black",
             label="nominal (y=x)",
         )
         axes[4].set_ylabel(r"Target $|\dot{roll}|$ [rad/s]")
-        axes[4].legend(ncol=2)
-        axes[4].grid(True, alpha=0.3)
+        if show_legend:
+            axes[4].legend(ncol=2)
         bottom_axis = axes[4]
     else:
         bottom_axis = axes[3]
@@ -755,28 +808,69 @@ def plot_roll_lpf_comparison(
     cutoff_hz: float,
     filter_order: int,
     window_title: str,
+    show_legend: bool = True,
+    line_width: float = 2.0,
+    marker_size: float = 6.0,
 ) -> None:
     rate = np.asarray([result.rate for result in results])
     fig, axis = plt.subplots(figsize=(7.2, 5.0))
     axis.plot(
         rate,
-        [result.roll_rmse for result in results],
-        "o--",
-        linewidth=1.5,
-        label="raw roll RMSE",
-    )
-    axis.plot(
-        rate,
         [result.roll_rmse_lpf for result in results],
-        "s-",
-        linewidth=2.0,
+        "o-",
+        linewidth=line_width,
+        markersize=marker_size,
         label="LPF roll RMSE",
     )
     axis.set_xlabel("Nominal roll command rate [rad/s]")
     axis.set_ylabel("Roll RMSE [rad]")
     axis.set_xticks(rate)
-    axis.grid(True, alpha=0.3)
-    axis.legend()
+    if show_legend:
+        axis.legend()
+    axis.set_title(
+        f"{window_title}\n"
+        f"Actual-roll LPF: {cutoff_hz:g} Hz, order {filter_order}"
+    )
+    fig.tight_layout()
+
+
+def plot_roll_rmse_vs_mean_servo_speed(
+    results: Sequence[Result],
+    cutoff_hz: float,
+    filter_order: int,
+    window_title: str,
+    show_legend: bool = True,
+    line_width: float = 2.0,
+    marker_size: float = 6.0,
+) -> None:
+    """Plot roll tracking error against measured mean servo angular speed."""
+    ordered_results = sorted(results, key=lambda result: result.servo_speed_mean)
+    mean_speed = np.asarray(
+        [result.servo_speed_mean for result in ordered_results],
+        dtype=float,
+    )
+
+    fig, axis = plt.subplots(figsize=(7.2, 5.0))
+    axis.plot(
+        mean_speed,
+        [result.roll_rmse for result in ordered_results],
+        "o--",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="raw roll RMSE",
+    )
+    axis.plot(
+        mean_speed,
+        [result.roll_rmse_lpf for result in ordered_results],
+        "s-",
+        linewidth=line_width,
+        markersize=marker_size,
+        label="LPF roll RMSE",
+    )
+    axis.set_xlabel(r"4-servo mean $|\dot{\theta}|$ [rad/s]")
+    axis.set_ylabel("Roll RMSE [rad]")
+    if show_legend:
+        axis.legend()
     axis.set_title(
         f"{window_title}\n"
         f"Actual-roll LPF: {cutoff_hz:g} Hz, order {filter_order}"
@@ -904,6 +998,32 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Butterworth order of the actual-roll LPF (default: 4)",
     )
+    parser.add_argument(
+        "--line-width",
+        type=float,
+        default=2.0,
+        help="line width used in all plots (default: 2.0)",
+    )
+    parser.add_argument(
+        "--marker-size",
+        type=float,
+        default=6.0,
+        help="marker size used in all plots (default: 6.0)",
+    )
+    legend_group = parser.add_mutually_exclusive_group()
+    legend_group.add_argument(
+        "--legend",
+        dest="show_legend",
+        action="store_true",
+        default=True,
+        help="show plot legends (default)",
+    )
+    legend_group.add_argument(
+        "--no-legend",
+        dest="show_legend",
+        action="store_false",
+        help="hide plot legends",
+    )
     return parser.parse_args()
 
 
@@ -925,6 +1045,10 @@ def main() -> None:
     )
     if len(set(args.servo_indices)) != 4:
         raise ValueError("--servo-indices must contain four different indices")
+    if not np.isfinite(args.line_width) or args.line_width <= 0.0:
+        raise ValueError("--line-width must be a positive finite number")
+    if not np.isfinite(args.marker_size) or args.marker_size <= 0.0:
+        raise ValueError("--marker-size must be a positive finite number")
     series_by_path = [
         (path, read_series(path, topics, args.servo_indices))
         for path in paths
@@ -987,6 +1111,9 @@ def main() -> None:
         args.servo_cutoff_hz,
         "Roll command: 0 to +0.5 rad",
         target_rate_mode="rising",
+        show_legend=args.show_legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
     )
     plot_results(
         falling_results,
@@ -994,18 +1121,45 @@ def main() -> None:
         args.servo_cutoff_hz,
         "Roll command: +0.5 to -0.5 rad",
         target_rate_mode="falling",
+        show_legend=args.show_legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
     )
     plot_roll_lpf_comparison(
         rising_results,
         args.roll_cutoff_hz,
         args.roll_lpf_order,
         "Roll command: 0 to +0.5 rad",
+        show_legend=args.show_legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
     )
     plot_roll_lpf_comparison(
         falling_results,
         args.roll_cutoff_hz,
         args.roll_lpf_order,
         "Roll command: +0.5 to -0.5 rad",
+        show_legend=args.show_legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
+    )
+    plot_roll_rmse_vs_mean_servo_speed(
+        rising_results,
+        args.roll_cutoff_hz,
+        args.roll_lpf_order,
+        "Roll command: 0 to +0.5 rad",
+        show_legend=args.show_legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
+    )
+    plot_roll_rmse_vs_mean_servo_speed(
+        falling_results,
+        args.roll_cutoff_hz,
+        args.roll_lpf_order,
+        "Roll command: +0.5 to -0.5 rad",
+        show_legend=args.show_legend,
+        line_width=args.line_width,
+        marker_size=args.marker_size,
     )
     plt.show()
 
