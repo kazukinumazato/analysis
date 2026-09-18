@@ -40,6 +40,7 @@ class CycleResult:
     servo_angle: float
     theta: float
     mean_force: np.ndarray
+    linearized_force_rate_sensitivity: np.ndarray
     max_force_magnitude: float
     force_sample_count: int
 
@@ -385,6 +386,20 @@ def compute_cycle_results(
         mean_force = np.trapz(
             force_in_cycle_start_frame, integration_times, axis=0
         ) / (end - start)
+        # Equation (9) of the paper gives the first-order model error as
+        #   Delta f_bar ~= R(theta_0) mean(delta_theta S(a) f).
+        # For a constant vectoring rate, delta_theta = theta_dot * (t - t_0).
+        # Store the coefficient multiplying theta_dot.  The vectoring axis is
+        # the servo-frame x-axis; the outer rotation can be omitted because
+        # only the error norm is used in Eq. (10).
+        vectoring_axis = np.array([1.0, 0.0, 0.0])
+        relative_times = integration_times - start
+        linearized_force_rate_sensitivity = np.trapz(
+            relative_times[:, np.newaxis]
+            * np.cross(vectoring_axis, force_in_cycle_start_frame),
+            integration_times,
+            axis=0,
+        ) / (end - start)
         max_force_magnitude = float(
             np.max(np.linalg.norm(force_in_cycle_start_frame, axis=1))
         )
@@ -399,6 +414,9 @@ def compute_cycle_results(
                     servo_angle=servo_angle,
                     theta=theta,
                     mean_force=np.asarray(mean_force, dtype=float),
+                    linearized_force_rate_sensitivity=np.asarray(
+                        linearized_force_rate_sensitivity, dtype=float
+                    ),
                     max_force_magnitude=max_force_magnitude,
                     force_sample_count=sample_count,
                 )
@@ -430,6 +448,10 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
             raise ValueError(
                 "fixed-angle mean force vector is zero for PWM {:.2f}".format(pwm)
             )
+        fixed_rate_sensitivities = np.vstack(
+            [cycle.linearized_force_rate_sensitivity for cycle in fixed_cycles]
+        )
+        fixed_rate_sensitivity = np.mean(fixed_rate_sensitivities, axis=0)
 
         speeds = sorted(speed for key_pwm, speed in grouped if key_pwm == pwm)
         for speed in speeds:
@@ -455,6 +477,12 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
             error_vector = mean_force - fixed_mean
             absolute_error = float(np.linalg.norm(error_vector))
             relative_error = 100.0 * absolute_error / fixed_norm
+            theoretical_error_vector = (
+                math.radians(speed) * fixed_rate_sensitivity
+            )
+            theoretical_relative_error = (
+                100.0 * float(np.linalg.norm(theoretical_error_vector)) / fixed_norm
+            )
             summaries.append(
                 {
                     "pwm": pwm,
@@ -464,6 +492,7 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
                     "fixed_mean_force_N": fixed_mean,
                     "absolute_error_N": absolute_error,
                     "relative_error_percent": relative_error,
+                    "theoretical_relative_error_percent": theoretical_relative_error,
                     "mean_peak_force_N": mean_peak_force,
                 }
             )
@@ -516,13 +545,21 @@ def plot_error(
             (row for row in filtered if row["pwm"] == pwm),
             key=lambda row: row["speed_deg_s"],
         )
-        axis.plot(
+        measured_line, = axis.plot(
             np.deg2rad([row["speed_deg_s"] for row in rows]),
             [row["relative_error_percent"] for row in rows],
-            label="PWM {:.2f}".format(pwm),
+            label="Experiment, PWM {:.2f}".format(pwm),
             marker="o",
             linewidth=line_width,
             markersize=marker_size,
+        )
+        axis.plot(
+            np.deg2rad([row["speed_deg_s"] for row in rows]),
+            [row["theoretical_relative_error_percent"] for row in rows],
+            label="Eq. (9), PWM {:.2f}".format(pwm),
+            color=measured_line.get_color(),
+            linestyle=":",
+            linewidth=line_width,
         )
 
     axis.set_xlabel("Servo angular velocity [rad/s]")

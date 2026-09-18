@@ -192,8 +192,12 @@ def main():
                     help="lowpass cutoff [Hz] for attitude error plot (0 to disable)")
     ap.add_argument("--plot-lp-order", type=int, default=4,
                     help="lowpass filter order (Butterworth)")
+    ap.add_argument("--att-line-width", type=float, default=1.8,
+                    help="line width for roll/pitch/yaw target and actual plots (default: 1.8)")
 
     args = ap.parse_args()
+    if not np.isfinite(args.att_line_width) or args.att_line_width <= 0.0:
+        ap.error("--att-line-width must be a positive finite number")
 
     # ---------- storage ----------
     # nav target: x/y position + attitude
@@ -477,22 +481,22 @@ def main():
     # ---------- attitude target vs actual (roll) ----------
     plt.figure()
     ta = t_act - start_time
-    plt.plot(ta, roll_tgt_plot, linewidth=1.8)
-    plt.plot(ta, roll_act_plot, linewidth=1.8)
+    plt.plot(ta, roll_tgt_plot, linewidth=args.att_line_width, linestyle="--")
+    plt.plot(ta, roll_act_plot, linewidth=args.att_line_width, linestyle="-")
     plt.xlabel("time [s]")
     plt.ylabel("roll [rad]")
 
     # ---------- attitude target vs actual (pitch) ----------
     plt.figure()
-    plt.plot(ta, pitch_tgt_plot, linewidth=1.8)
-    plt.plot(ta, pitch_act_plot, linewidth=1.8)
+    plt.plot(ta, pitch_tgt_plot, linewidth=args.att_line_width, linestyle="--")
+    plt.plot(ta, pitch_act_plot, linewidth=args.att_line_width, linestyle="-")
     plt.xlabel("time [s]")
     plt.ylabel("pitch [rad]")
 
     # ---------- attitude target vs actual (yaw) ----------
     plt.figure()
-    plt.plot(ta, yaw_tgt_plot, linewidth=1.8)
-    plt.plot(ta, yaw_act_plot, linewidth=1.8)
+    plt.plot(ta, yaw_tgt_plot, linewidth=args.att_line_width, linestyle="--")
+    plt.plot(ta, yaw_act_plot, linewidth=args.att_line_width, linestyle="-")
     plt.xlabel("time [s]")
     plt.ylabel("yaw [rad]")
 
@@ -501,16 +505,16 @@ def main():
     ta = t_act - start_time
 
     # roll
-    plt.plot(ta, roll_tgt_plot,  linewidth=1.6)
-    plt.plot(ta, roll_act_plot,  linewidth=1.6)
+    plt.plot(ta, roll_tgt_plot, linewidth=args.att_line_width, linestyle="--")
+    plt.plot(ta, roll_act_plot, linewidth=args.att_line_width, linestyle="-")
 
     # pitch
-    plt.plot(ta, pitch_tgt_plot, linewidth=1.6)
-    plt.plot(ta, pitch_act_plot, linewidth=1.6)
+    plt.plot(ta, pitch_tgt_plot, linewidth=args.att_line_width, linestyle="--")
+    plt.plot(ta, pitch_act_plot, linewidth=args.att_line_width, linestyle="-")
 
     # yaw
-    plt.plot(ta, yaw_tgt_plot,   linewidth=1.6)
-    plt.plot(ta, yaw_act_plot,   linewidth=1.6)
+    plt.plot(ta, yaw_tgt_plot, linewidth=args.att_line_width, linestyle="--")
+    plt.plot(ta, yaw_act_plot, linewidth=args.att_line_width, linestyle="-")
 
     plt.xlabel("time [s]")
     plt.ylabel("attitude [rad]")

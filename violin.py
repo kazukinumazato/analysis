@@ -16,6 +16,11 @@ try:
 except Exception:
     raise ImportError("SciPy (scipy.signal) が見つかりません。SciPy が必要です。")
 
+try:
+    from scipy.stats import t
+except Exception:
+    raise ImportError("SciPy (scipy.stats) が見つかりません。SciPy が必要です。")
+
 
 # ---------------- color style ----------------
 
@@ -277,6 +282,47 @@ def _safe_get_target_p(msg, name):
         return float(getattr(getattr(msg, name), "target_p"))
     except Exception:
         return np.nan
+
+
+def _summarize_distribution(values, label, unit):
+    """配列の基本統計量を表示する。"""
+    arr = np.asarray(values, float)
+    finite = arr[np.isfinite(arr)]
+
+    if finite.size == 0:
+        print(f"=== {label} ===")
+        print("count         : 0")
+        print(f"mean          : nan {unit}")
+        print(f"variance      : nan {unit}^2")
+        print(f"std           : nan {unit}")
+        print(f"95% CI(mean)  : [nan, nan] {unit}")
+        print()
+        return
+
+    n = int(finite.size)
+    mean = float(np.mean(finite))
+    var = float(np.var(finite, ddof=1)) if n > 1 else 0.0
+    std = float(np.std(finite, ddof=1)) if n > 1 else 0.0
+    sem = std / np.sqrt(n) if n > 1 else 0.0
+
+    if n > 1:
+        ci_low = mean - t.ppf(0.975, df=n - 1) * sem
+        ci_high = mean + t.ppf(0.975, df=n - 1) * sem
+    else:
+        ci_low = mean
+        ci_high = mean
+
+    print(f"=== {label} ===")
+    print(f"count         : {n}")
+    print(f"mean          : {mean:.6f} {unit}")
+    print(f"variance      : {var:.6f} {unit}^2")
+    print(f"std           : {std:.6f} {unit}")
+    print(f"median        : {float(np.median(finite)):.6f} {unit}")
+    print(f"Q1/Q3         : {float(np.percentile(finite, 25)):.6f}/{float(np.percentile(finite, 75)):.6f} {unit}")
+    print(f"min/max       : {float(np.min(finite)):.6f}/{float(np.max(finite)):.6f} {unit}")
+    print(f"SE            : {sem:.6f} {unit}")
+    print(f"95% CI(mean)  : [{ci_low:.6f}, {ci_high:.6f}] {unit}")
+    print()
 
 
 # ---------------- main ----------------
@@ -755,6 +801,16 @@ def main():
         print("roll RMSE   : nan (attitude target not available)")
         print("pitch RMSE  : nan (attitude target not available)")
         print("yaw RMSE    : nan (attitude target not available)")
+
+    print()
+    print("=== Distribution statistics (error) ===")
+    _summarize_distribution(x_err, "x error", unit_pos)
+    _summarize_distribution(y_err, "y error", unit_pos)
+    _summarize_distribution(z_err, "z error", unit_pos)
+    if has_att_target:
+        _summarize_distribution(roll_err, "roll error", unit_att)
+        _summarize_distribution(pitch_err, "pitch error", unit_att)
+        _summarize_distribution(yaw_err, "yaw error", unit_att)
 
     # ---------- plots ----------
 
