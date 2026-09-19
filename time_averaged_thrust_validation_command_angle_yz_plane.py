@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the force-vector model using commanded servo angles."""
+"""Validate the y-z-plane force model using commanded servo angles."""
 
 import argparse
 import math
@@ -439,8 +439,9 @@ def compute_cycle_results(
         #   Delta f_bar ~= R(theta_0) mean(delta_theta S(a) f).
         # For a constant vectoring rate, delta_theta = theta_dot * (t - t_0).
         # Store the coefficient multiplying theta_dot.  The vectoring axis is
-        # the servo-frame x-axis; the outer rotation can be omitted because
-        # only the error norm is used in Eq. (10).
+        # the servo-frame x-axis.  The measured force has already been
+        # expressed in the frame at the beginning of the cycle, so the
+        # coefficient below is expressed in that same frame.
         vectoring_axis = np.array([1.0, 0.0, 0.0])
         relative_times = integration_times - start
         linearized_force_rate_sensitivity = np.trapz(
@@ -492,10 +493,12 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
             continue
         fixed_cycle_vectors = np.vstack([cycle.mean_force for cycle in fixed_cycles])
         fixed_mean = np.mean(fixed_cycle_vectors, axis=0)
-        fixed_norm = float(np.linalg.norm(fixed_mean))
-        if math.isclose(fixed_norm, 0.0, abs_tol=1.0e-12):
+        fixed_yz_norm = float(np.linalg.norm(fixed_mean[1:]))
+        if math.isclose(fixed_yz_norm, 0.0, abs_tol=1.0e-12):
             raise ValueError(
-                "fixed-angle mean force vector is zero for PWM {:.2f}".format(pwm)
+                "fixed-angle mean y-z force vector is zero for PWM {:.2f}".format(
+                    pwm
+                )
             )
         fixed_rate_sensitivities = np.vstack(
             [cycle.linearized_force_rate_sensitivity for cycle in fixed_cycles]
@@ -514,23 +517,25 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
             mean_peak_force = float(np.mean(peak_force_magnitudes))
             if (
                 not math.isclose(speed, 0.0, abs_tol=1.0e-12)
-                and float(mean_force.dot(fixed_mean)) <= 0.0
+                and float(mean_force[1:].dot(fixed_mean[1:])) <= 0.0
             ):
                 print(
-                    "Warning: skipping PWM {:.2f}, {:.1f} deg/s: mean force "
-                    "points opposite to the fixed-angle mean (invalid or "
-                    "failed-actuator data)".format(pwm, speed),
+                    "Warning: skipping PWM {:.2f}, {:.1f} deg/s: mean y-z force "
+                    "points opposite to the fixed-angle mean y-z force (invalid "
+                    "or failed-actuator data)".format(pwm, speed),
                     file=sys.stderr,
                 )
                 continue
             error_vector = mean_force - fixed_mean
-            absolute_error = float(np.linalg.norm(error_vector))
-            relative_error = 100.0 * absolute_error / fixed_norm
+            absolute_yz_error = float(np.linalg.norm(error_vector[1:]))
+            relative_yz_error = 100.0 * absolute_yz_error / fixed_yz_norm
             theoretical_error_vector = (
                 math.radians(speed) * fixed_rate_sensitivity
             )
-            theoretical_relative_error = (
-                100.0 * float(np.linalg.norm(theoretical_error_vector)) / fixed_norm
+            theoretical_relative_yz_error = (
+                100.0
+                * float(np.linalg.norm(theoretical_error_vector[1:]))
+                / fixed_yz_norm
             )
             summaries.append(
                 {
@@ -539,12 +544,9 @@ def build_summary(cycles: Sequence[CycleResult]) -> List[dict]:
                     "cycle_count": len(cycle_results),
                     "mean_force_N": mean_force,
                     "fixed_mean_force_N": fixed_mean,
-                    "absolute_error_N": absolute_error,
-                    "relative_error_percent": relative_error,
-                    "theoretical_relative_error_percent": theoretical_relative_error,
-                    "fixed_force_rate_sensitivity_N_s_per_rad": (
-                        fixed_rate_sensitivity.copy()
-                    ),
+                    "absolute_yz_error_N": absolute_yz_error,
+                    "relative_yz_error_percent": relative_yz_error,
+                    "theoretical_relative_yz_error_percent": theoretical_relative_yz_error,
                     "mean_peak_force_N": mean_peak_force,
                 }
             )
@@ -575,140 +577,6 @@ def filter_summaries(
     return filtered
 
 
-def fit_relative_error_through_origin(rows: Sequence[dict]) -> dict:
-    """Fit relative error versus |theta_dot| and infer an equivalent K_i.
-
-    Neglecting the higher-order term, the constant-rate model is
-
-        ||Delta f_bar|| / ||f_bar_0||
-            = |theta_dot| ||K_i + A_i|| / ||f_bar_0||,
-
-    where A_i is the fixed-angle force-rate sensitivity.  The model therefore
-    passes through the origin.  Force the regression through the origin so its
-    slope can be compared directly with the first-order theory.
-
-    Error norms determine ||K_i + A_i||, not the three components of K_i.
-    Besides that identifiable value, return the minimum-norm K_i satisfying
-    the equality; the full solution is K_i = -A_i + q*u for any unit vector u.
-    """
-    if not rows:
-        raise ValueError("at least one summary row is required for regression")
-
-    angular_speeds = np.abs(
-        np.deg2rad([float(row["speed_deg_s"]) for row in rows])
-    )
-    relative_errors = np.asarray(
-        [float(row["relative_error_percent"]) for row in rows], dtype=float
-    )
-    speed_square_sum = float(angular_speeds.dot(angular_speeds))
-    if math.isclose(speed_square_sum, 0.0, abs_tol=1.0e-15):
-        raise ValueError("regression requires at least one nonzero angular speed")
-
-    slope = float(angular_speeds.dot(relative_errors) / speed_square_sum)
-    fixed_mean_force = np.asarray(rows[0]["fixed_mean_force_N"], dtype=float)
-    fixed_force_norm = float(np.linalg.norm(fixed_mean_force))
-    if math.isclose(fixed_force_norm, 0.0, abs_tol=1.0e-12):
-        raise ValueError("fixed-angle mean force vector is zero")
-
-    force_rate_sensitivity = np.asarray(
-        rows[0]["fixed_force_rate_sensitivity_N_s_per_rad"], dtype=float
-    )
-    sensitivity_norm = float(np.linalg.norm(force_rate_sensitivity))
-    # q is the value of ||K_i + A_i|| required for the theoretical slope to
-    # equal the fitted slope.  Percent is converted back to a ratio here.
-    combined_coefficient_norm = slope * fixed_force_norm / 100.0
-
-    if math.isclose(sensitivity_norm, 0.0, abs_tol=1.0e-15):
-        if math.isclose(combined_coefficient_norm, 0.0, abs_tol=1.0e-15):
-            minimum_norm_ki = np.zeros(3, dtype=float)
-        else:
-            # Every direction has the same minimum norm when A_i is zero, so
-            # no unique vector can be inferred from norm-only measurements.
-            minimum_norm_ki = np.full(3, np.nan, dtype=float)
-    else:
-        minimum_norm_ki = (
-            combined_coefficient_norm / sensitivity_norm - 1.0
-        ) * force_rate_sensitivity
-
-    fitted_errors = slope * angular_speeds
-    residuals = relative_errors - fitted_errors
-    error_square_sum = float(residuals.dot(residuals))
-    data_square_sum = float(relative_errors.dot(relative_errors))
-    r_squared = (
-        1.0 - error_square_sum / data_square_sum
-        if not math.isclose(data_square_sum, 0.0, abs_tol=1.0e-15)
-        else 1.0
-    )
-
-    return {
-        "slope_percent_per_rad_s": slope,
-        "r_squared_through_origin": r_squared,
-        "force_rate_sensitivity_N_s_per_rad": force_rate_sensitivity,
-        "force_rate_sensitivity_norm_N_s_per_rad": sensitivity_norm,
-        "combined_coefficient_norm_N_s_per_rad": combined_coefficient_norm,
-        "minimum_norm_ki_N_s_per_rad": minimum_norm_ki,
-        "minimum_ki_norm_N_s_per_rad": abs(
-            combined_coefficient_norm - sensitivity_norm
-        ),
-    }
-
-
-def print_regression_results(summaries: Sequence[dict]) -> None:
-    print(
-        "\nLinear regressions and equivalent aerodynamic coefficients "
-        "(higher-order terms neglected):"
-    )
-    for pwm in sorted({float(row["pwm"]) for row in summaries}):
-        rows = [row for row in summaries if float(row["pwm"]) == pwm]
-        try:
-            fit = fit_relative_error_through_origin(rows)
-        except ValueError as error:
-            print("  PWM {:.2f}: {}".format(pwm, error))
-            continue
-
-        sensitivity = fit["force_rate_sensitivity_N_s_per_rad"]
-        minimum_norm_ki = fit["minimum_norm_ki_N_s_per_rad"]
-        print(
-            "  PWM {pwm:.2f}: error[%] = {slope:.6f} |theta_dot[rad/s]| "
-            "(origin-constrained R^2={r_squared:.6f})".format(
-                pwm=pwm,
-                slope=fit["slope_percent_per_rad_s"],
-                r_squared=fit["r_squared_through_origin"],
-            )
-        )
-        print(
-            "    A_i=({: .6e}, {: .6e}, {: .6e}) N s/rad, "
-            "||A_i||={:.6e} N s/rad".format(
-                sensitivity[0],
-                sensitivity[1],
-                sensitivity[2],
-                fit["force_rate_sensitivity_norm_N_s_per_rad"],
-            )
-        )
-        print(
-            "    matching condition: ||K_i + A_i||={:.6e} N s/rad".format(
-                fit["combined_coefficient_norm_N_s_per_rad"]
-            )
-        )
-        if np.all(np.isfinite(minimum_norm_ki)):
-            print(
-                "    minimum-norm equivalent K_i=({: .6e}, {: .6e}, "
-                "{: .6e}) N s/rad, ||K_i||={:.6e} N s/rad".format(
-                    minimum_norm_ki[0],
-                    minimum_norm_ki[1],
-                    minimum_norm_ki[2],
-                    fit["minimum_ki_norm_N_s_per_rad"],
-                )
-            )
-        else:
-            print(
-                "    K_i direction is indeterminate because A_i is zero; "
-                "minimum ||K_i||={:.6e} N s/rad".format(
-                    fit["minimum_ki_norm_N_s_per_rad"]
-                )
-            )
-
-
 def plot_error(
     summaries: Sequence[dict],
     pwm_values: Optional[Sequence[float]] = None,
@@ -733,50 +601,24 @@ def plot_error(
         )
         measured_line, = axis.plot(
             np.deg2rad([row["speed_deg_s"] for row in rows]),
-            [row["relative_error_percent"] for row in rows],
+            [row["relative_yz_error_percent"] for row in rows],
             label="Experiment, PWM {:.2f}".format(pwm),
             marker="o",
             linewidth=line_width,
             markersize=marker_size,
         )
-        try:
-            fit = fit_relative_error_through_origin(rows)
-        except ValueError as error:
-            print(
-                "Warning: skipping regression for PWM {:.2f}: {}".format(
-                    pwm, error
-                ),
-                file=sys.stderr,
-            )
-        else:
-            angular_speeds = np.abs(
-                np.deg2rad([row["speed_deg_s"] for row in rows])
-            )
-            fit_speeds = np.linspace(
-                float(np.min(angular_speeds)),
-                float(np.max(angular_speeds)),
-                200,
-            )
-            axis.plot(
-                fit_speeds,
-                fit["slope_percent_per_rad_s"] * fit_speeds,
-                label="Linear fit (through origin), PWM {:.2f}".format(pwm),
-                color=measured_line.get_color(),
-                linestyle="--",
-                linewidth=line_width,
-            )
         axis.plot(
             np.deg2rad([row["speed_deg_s"] for row in rows]),
-            [row["theoretical_relative_error_percent"] for row in rows],
-            label="Theory ($K_i=0$), PWM {:.2f}".format(pwm),
+            [row["theoretical_relative_yz_error_percent"] for row in rows],
+            label="Eq. (9), PWM {:.2f}".format(pwm),
             color=measured_line.get_color(),
             linestyle=":",
             linewidth=line_width,
         )
 
     axis.set_xlabel("Servo angular velocity [rad/s]")
-    axis.set_ylabel("Relative error norm of mean cycle-averaged force [%]")
-    title = "Validation of the time-averaged thrust model"
+    axis.set_ylabel("Relative error norm of mean cycle-averaged y-z force [%]")
+    title = "Validation of the time-averaged thrust model (y-z-plane error)"
     if pwm_values is not None or speed_min is not None or speed_max is not None:
         title += " (filtered)"
     axis.set_title(title)
@@ -790,8 +632,9 @@ def plot_error(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare fixed- and time-varying-servo cycle-averaged force vectors for "
-            "each PWM value in a dc_motor_servo_test rosbag."
+            "Compare the y-z components of fixed- and time-varying-servo "
+            "cycle-averaged forces for each PWM value in a "
+            "dc_motor_servo_test rosbag."
         )
     )
     parser.add_argument("bag", type=Path, help="input ROS1 bag")
@@ -1086,18 +929,21 @@ def main() -> int:
     print("\nSummary (fixed-angle only):")
     for row in fixed_angle_summaries:
         mean_force = row["mean_force_N"]
-        mean_force_magnitude = float(np.linalg.norm(mean_force))
+        mean_yz_magnitude = float(np.linalg.norm(mean_force[1:]))
         print(
             "  PWM {pwm:.2f}, {speed_deg_s:>4.1f} deg/s: "
             "mean=({: .5f}, {: .5f}, {: .5f}) N, "
-            "mean force magnitude={: .5f} N, "
+            "mean y-z force magnitude={: .5f} N, "
             "avg max force magnitude={mean_peak_force_N:.5f} N, "
-            "|delta mean|={absolute_error_N:.5f} N, "
-            "error={relative_error_percent:6.2f}%, cycles={cycle_count}".format(
-                mean_force[0], mean_force[1], mean_force[2], mean_force_magnitude, **row
+            "|delta mean y-z|={absolute_yz_error_N:.5f} N, "
+            "y-z error={relative_yz_error_percent:6.2f}%, cycles={cycle_count}".format(
+                mean_force[0],
+                mean_force[1],
+                mean_force[2],
+                mean_yz_magnitude,
+                **row,
             )
         )
-    print_regression_results(filtered_summaries)
     plot_error(
         summaries,
         pwm_values=args.pwm_selection,

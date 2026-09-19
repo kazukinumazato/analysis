@@ -481,22 +481,58 @@ def main():
     # ---------- attitude target vs actual (roll) ----------
     plt.figure()
     ta = t_act - start_time
-    plt.plot(ta, roll_tgt_plot, linewidth=args.att_line_width, linestyle="--")
-    plt.plot(ta, roll_act_plot, linewidth=args.att_line_width, linestyle="-")
+    plt.plot(
+        ta,
+        roll_tgt_plot,
+        linewidth=args.att_line_width,
+        linestyle="--",
+        color="red",
+    )
+    plt.plot(
+        ta,
+        roll_act_plot,
+        linewidth=args.att_line_width,
+        linestyle="-",
+        color="red",
+    )
     plt.xlabel("time [s]")
     plt.ylabel("roll [rad]")
 
     # ---------- attitude target vs actual (pitch) ----------
     plt.figure()
-    plt.plot(ta, pitch_tgt_plot, linewidth=args.att_line_width, linestyle="--")
-    plt.plot(ta, pitch_act_plot, linewidth=args.att_line_width, linestyle="-")
+    plt.plot(
+        ta,
+        pitch_tgt_plot,
+        linewidth=args.att_line_width,
+        linestyle="--",
+        color="green",
+    )
+    plt.plot(
+        ta,
+        pitch_act_plot,
+        linewidth=args.att_line_width,
+        linestyle="-",
+        color="green",
+    )
     plt.xlabel("time [s]")
     plt.ylabel("pitch [rad]")
 
     # ---------- attitude target vs actual (yaw) ----------
     plt.figure()
-    plt.plot(ta, yaw_tgt_plot, linewidth=args.att_line_width, linestyle="--")
-    plt.plot(ta, yaw_act_plot, linewidth=args.att_line_width, linestyle="-")
+    plt.plot(
+        ta,
+        yaw_tgt_plot,
+        linewidth=args.att_line_width,
+        linestyle="--",
+        color="blue",
+    )
+    plt.plot(
+        ta,
+        yaw_act_plot,
+        linewidth=args.att_line_width,
+        linestyle="-",
+        color="blue",
+    )
     plt.xlabel("time [s]")
     plt.ylabel("yaw [rad]")
 
@@ -505,16 +541,52 @@ def main():
     ta = t_act - start_time
 
     # roll
-    plt.plot(ta, roll_tgt_plot, linewidth=args.att_line_width, linestyle="--")
-    plt.plot(ta, roll_act_plot, linewidth=args.att_line_width, linestyle="-")
+    plt.plot(
+        ta,
+        roll_tgt_plot,
+        linewidth=args.att_line_width,
+        linestyle="--",
+        color="red",
+    )
+    plt.plot(
+        ta,
+        roll_act_plot,
+        linewidth=args.att_line_width,
+        linestyle="-",
+        color="red",
+    )
 
     # pitch
-    plt.plot(ta, pitch_tgt_plot, linewidth=args.att_line_width, linestyle="--")
-    plt.plot(ta, pitch_act_plot, linewidth=args.att_line_width, linestyle="-")
+    plt.plot(
+        ta,
+        pitch_tgt_plot,
+        linewidth=args.att_line_width,
+        linestyle="--",
+        color="green",
+    )
+    plt.plot(
+        ta,
+        pitch_act_plot,
+        linewidth=args.att_line_width,
+        linestyle="-",
+        color="green",
+    )
 
     # yaw
-    plt.plot(ta, yaw_tgt_plot, linewidth=args.att_line_width, linestyle="--")
-    plt.plot(ta, yaw_act_plot, linewidth=args.att_line_width, linestyle="-")
+    plt.plot(
+        ta,
+        yaw_tgt_plot,
+        linewidth=args.att_line_width,
+        linestyle="--",
+        color="blue",
+    )
+    plt.plot(
+        ta,
+        yaw_act_plot,
+        linewidth=args.att_line_width,
+        linestyle="-",
+        color="blue",
+    )
 
     plt.xlabel("time [s]")
     plt.ylabel("attitude [rad]")
@@ -523,8 +595,20 @@ def main():
     #    actual is interpolated onto nav timebase; then NaNを除去してプロット
     plt.figure()
     m_xy = np.isfinite(x_tgt_w) & np.isfinite(y_tgt_w) & np.isfinite(x_act_i) & np.isfinite(y_act_i)
-    plt.plot(x_tgt_w[m_xy], y_tgt_w[m_xy], linewidth=6.0, linestyle='--')
-    plt.plot(x_act_i[m_xy], y_act_i[m_xy], linewidth=6.0)
+    plt.plot(
+        x_tgt_w[m_xy],
+        y_tgt_w[m_xy],
+        linewidth=6.0,
+        linestyle="--",
+        color="black",
+    )
+    plt.plot(
+        x_act_i[m_xy],
+        y_act_i[m_xy],
+        linewidth=6.0,
+        linestyle="-",
+        color="black",
+    )
     plt.xlabel("x [m]")
     plt.ylabel("y [m]")
     plt.axis("equal")

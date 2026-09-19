@@ -29,6 +29,7 @@ PALETTE = {
     "pale_blue": "#C1D8E9",
     "lavender": "#DBDDEF",
     "peach": "#F6C8B6",
+    "deep_red": "#B23A48",
     "gray": "#D4D4D4",
     "dark": "#4A4A4A",
 }
@@ -47,6 +48,11 @@ ATT_COLORS = [
 
 TRAJ_COLOR = PALETTE["blue"]
 EDGE_COLOR = PALETTE["dark"]
+VIOLIN_OUTLINE_WIDTH = 2.0
+VIOLIN_STAT_WIDTH = 2.0
+VIOLIN_MEAN_WIDTH = 2.6
+VIOLIN_MEDIAN_WIDTH = 3.0
+VIOLIN_AXIS_WIDTH = 1.6
 
 
 def _apply_paper_style():
@@ -234,27 +240,27 @@ def _colored_violinplot(data_list, labels, ylabel, colors, alpha=0.82):
         body.set_facecolor(color)
         body.set_edgecolor(EDGE_COLOR)
         body.set_alpha(alpha)
-        body.set_linewidth(0.8)
+        body.set_linewidth(VIOLIN_OUTLINE_WIDTH)
 
     if "cmeans" in parts:
         parts["cmeans"].set_edgecolor(EDGE_COLOR)
-        parts["cmeans"].set_linewidth(1.0)
+        parts["cmeans"].set_linewidth(VIOLIN_MEAN_WIDTH)
 
     if "cmedians" in parts:
-        parts["cmedians"].set_edgecolor(PALETTE["peach"])
-        parts["cmedians"].set_linewidth(1.4)
+        parts["cmedians"].set_edgecolor(PALETTE["deep_red"])
+        parts["cmedians"].set_linewidth(VIOLIN_MEDIAN_WIDTH)
 
     if "cbars" in parts:
         parts["cbars"].set_edgecolor(EDGE_COLOR)
-        parts["cbars"].set_linewidth(0.9)
+        parts["cbars"].set_linewidth(VIOLIN_STAT_WIDTH)
 
     if "cmins" in parts:
         parts["cmins"].set_edgecolor(EDGE_COLOR)
-        parts["cmins"].set_linewidth(0.9)
+        parts["cmins"].set_linewidth(VIOLIN_STAT_WIDTH)
 
     if "cmaxes" in parts:
         parts["cmaxes"].set_edgecolor(EDGE_COLOR)
-        parts["cmaxes"].set_linewidth(0.9)
+        parts["cmaxes"].set_linewidth(VIOLIN_STAT_WIDTH)
 
     ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
@@ -264,6 +270,9 @@ def _colored_violinplot(data_list, labels, ylabel, colors, alpha=0.82):
     fig.tight_layout()
 
     _apply_paper_style()
+    ax.spines["left"].set_linewidth(VIOLIN_AXIS_WIDTH)
+    ax.spines["bottom"].set_linewidth(VIOLIN_AXIS_WIDTH)
+    ax.tick_params(width=VIOLIN_AXIS_WIDTH)
 
 
 def _safe_get_target_p(msg, name):
